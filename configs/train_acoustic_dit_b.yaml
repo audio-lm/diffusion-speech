@@ -1,0 +1,26 @@
+enable_wandb: true
+wandb_project: diffusion-speech
+model: DiT-B
+seed: 42
+optimization:
+  global_batch_size: 512
+  learning_rate: 1.0e-4 # .0 is IMPORTANT
+  weight_decay: 0.0
+  max_grad_norm: 1.0
+  betas:
+    beta1: 0.9
+    beta2: 0.999
+data_path: /tmp/data/acoustic/acoustic.npy
+loss:
+  num_timesteps: 1000
+  loss_type: l2
+resume_from_ckpt: null
+use_bfloat16: true
+enable_compile: true
+input_size: 8192
+in_channels: 100
+log_every: 1000
+epochs: 1400
+results_dir: results/acoustic
+learn_sigma: true
+ckpt_every: 10_000
