@@ -6,11 +6,8 @@ To get started, you need to install the dependencies and download the dataset. W
 
 ```
 pip install uv
-export UV_PROJECT_ENVIRONMENT=/tmp/uv_venv
-uv venv
-source /tmp/uv_venv/bin/activate
-uv pip sync pyproject.toml
-wandb login
+uv venv -p python3.11
+uv pip install -r pyproject.toml
 ```
 
 We use LibriTTS-R dataset.
