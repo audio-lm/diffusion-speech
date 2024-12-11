@@ -192,7 +192,8 @@ def get_batch(step, batch_size, seq_len):
     )
 
     # Create random number generator
-    rng = np.random.Generator(np.random.PCG64(seed=step))
+    seed = step * WORLD_SIZE + RANK
+    rng = np.random.Generator(np.random.PCG64(seed=seed))
 
     # Generate start indices and convert to integer array
     start_indices = rng.choice(
@@ -307,7 +308,8 @@ def compute_loss(model, x, phone, speaker_id, length):
 
 while True:
     if train_steps % CONFIG["ckpt_every"] == 0:
-        torch.manual_seed(CONFIG["seed"] * (train_steps + 1) + RANK)
+        seed = CONFIG["seed"] * (train_steps + 1) * WORLD_SIZE + RANK
+        torch.manual_seed(seed)
 
     length = int(2 ** (5 + train_steps / 10_000))
     length = min(length, CONFIG["input_size"])
