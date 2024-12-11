@@ -9,8 +9,7 @@ pip install uv
 export UV_PROJECT_ENVIRONMENT=/tmp/uv_venv
 uv venv
 source /tmp/uv_venv/bin/activate
-# uv add torch vocos matplotlib textgrid wandb numpy
-uv sync
+uv pip sync pyproject.toml
 wandb login
 ```
 
