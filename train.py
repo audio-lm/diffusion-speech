@@ -63,10 +63,10 @@ def configure_optimizers(
     num_decay_params = sum(p.numel() for p in decay_params)
     num_nodecay_params = sum(p.numel() for p in nodecay_params)
     logger.info(
-        f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters"
+        f"Num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters"
     )
     logger.info(
-        f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters"
+        f"Num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters"
     )
     # Create AdamW optimizer and use the fused version if it is available
     fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
@@ -75,7 +75,7 @@ def configure_optimizers(
     optimizer = torch.optim.AdamW(
         optim_groups, lr=learning_rate, betas=betas, **extra_args
     )
-    logger.info(f"using fused AdamW: {use_fused}")
+    logger.info(f"Use fused AdamW: {use_fused}")
 
     return optimizer
 
@@ -144,25 +144,30 @@ parser.add_argument("--config", type=str, required=True)
 args = parser.parse_args()
 with open(args.config, "r") as f:
     CONFIG = yaml.safe_load(f)
+
+model_config = CONFIG["model"]
 opt_config = CONFIG["optimization"]
+data_config = CONFIG["data"]
+training_config = CONFIG["training"]
+wandb_config = training_config["wandb"]
 
 # Validate batch size and set seed
 assert opt_config["global_batch_size"] % WORLD_SIZE == 0
-seed = CONFIG["seed"] * WORLD_SIZE + RANK
+seed = training_config["seed"] * WORLD_SIZE + RANK
 torch.manual_seed(seed)
 torch.cuda.set_device(DEVICE)
 
 # Initialize wandb if enabled
-if RANK == 0 and CONFIG["enable_wandb"]:
-    wandb.init(project=CONFIG["wandb_project"], config=CONFIG)
+if RANK == 0 and wandb_config["enable"]:
+    wandb.init(project=wandb_config["project"], config=CONFIG)
 
 # Setup experiment directories and logger
 if RANK == 0:
-    os.makedirs(CONFIG["results_dir"], exist_ok=True)
-    experiment_index = len(glob(f"{CONFIG['results_dir']}/*"))
-    model_string_name = CONFIG["model"].replace("/", "-")
+    os.makedirs(training_config["results_dir"], exist_ok=True)
+    experiment_index = len(glob(f"{training_config['results_dir']}/*"))
+    model_string_name = model_config["name"].replace("/", "-")
     experiment_dir = (
-        f"{CONFIG['results_dir']}/{experiment_index:03d}-{model_string_name}"
+        f"{training_config['results_dir']}/{experiment_index:03d}-{model_string_name}"
     )
     checkpoint_dir = f"{experiment_dir}/checkpoints"
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -182,13 +187,14 @@ def get_batch(step, batch_size, seq_len):
     import numpy as np
 
     # Load dataset from memmap file
-
-    arr = np.memmap(CONFIG["data_path"], dtype=np.float16, mode="r")
+    data_dim = data_config["data_dim"]
+    data_path = data_config["data_path"]
+    arr = np.memmap(data_path, dtype=np.float16, mode="r")
     arr = np.memmap(
-        CONFIG["data_path"],
+        data_path,
         dtype=np.float16,
         mode="r",
-        shape=(arr.shape[0] // 102, 102),
+        shape=(arr.shape[0] // (data_dim + 2), data_dim + 2),
     )
 
     # Create random number generator
@@ -201,32 +207,37 @@ def get_batch(step, batch_size, seq_len):
     ).astype(np.int64)
 
     # Create batch data array
-    batch_data = np.zeros((batch_size, seq_len, 102), dtype=np.float16)
-
+    batch_data = np.zeros((batch_size, seq_len, data_dim + 2), dtype=np.float16)
     # Fill batch data one sequence at a time
     for i, start_idx in enumerate(start_indices):
         batch_data[i] = arr[start_idx : start_idx + seq_len]
 
     # Extract features
-    mel = batch_data[:, :, :100].astype(np.float16)
-    mel = np.moveaxis(mel, 1, 2)
-    phone = batch_data[:, :, 100].astype(np.int32)
-    speaker_id = batch_data[:, :, 101].astype(np.int32)
+    x = batch_data[:, :, :data_dim].astype(np.float16)
+    x = np.moveaxis(x, 1, 2)
+    phone = batch_data[:, :, data_dim].astype(np.int32)
+    speaker_id = batch_data[:, :, data_dim + 1].astype(np.int32)
 
     # convert to torch tensors
-    mel = torch.from_numpy(mel).to(DEVICE)
+    x = torch.from_numpy(x).to(DEVICE)
+    if data_config["normalize"]:
+        x = (x - data_config["data_mean"]) / data_config["data_std"]
     phone = torch.from_numpy(phone).to(DEVICE)
     speaker_id = torch.from_numpy(speaker_id).to(DEVICE)
 
-    return mel, (speaker_id, phone)
+    return x, (speaker_id, phone)
 
 
 # Initialize model
-model = DiT_models[CONFIG["model"]](
-    input_size=CONFIG["input_size"],
-    in_channels=CONFIG["in_channels"],
-    learn_sigma=CONFIG["learn_sigma"],
+model = DiT_models[model_config["name"]](
+    input_size=model_config["input_size"],
+    embedding_vocab_size=model_config["embedding_vocab_size"],
+    learn_sigma=model_config["learn_sigma"],
+    in_channels=data_config["data_dim"],
 ).float()
+
+# log model architecture
+logger.info(f"Model architecture: {model}")
 
 # Setup model and EMA
 ema = deepcopy(model).to(DEVICE)
@@ -238,14 +249,17 @@ simple_model = model
 if IS_DISTRIBUTED:
     model = DDP(model, device_ids=[RANK])
 
-if CONFIG["enable_compile"]:
+use_compile = training_config.get("enable_compile", False)
+if use_compile:
     model = torch.compile(model, dynamic=True)
+logger.info(f"Use torch.compile: {use_compile}")
 
 
 update_ema(ema, simple_model, decay=0)
 
 # Setup diffusion
-diffusion = create_diffusion(timestep_respacing="", learn_sigma=CONFIG["learn_sigma"])
+learn_sigma = model_config["learn_sigma"]
+diffusion = create_diffusion(timestep_respacing="", learn_sigma=learn_sigma)
 logger.info(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
 # Configure optimizer
@@ -260,13 +274,12 @@ opt = configure_optimizers(
 
 # Load checkpoint if resuming training
 train_steps = 0
-if CONFIG["resume_from_ckpt"]:
-    if os.path.exists(CONFIG["resume_from_ckpt"]):
-        logger.info(f"Loading checkpoint from {CONFIG['resume_from_ckpt']}")
+ckpt_path = training_config.get("resume_from_ckpt", None)
+if ckpt_path:
+    if os.path.exists(ckpt_path):
+        logger.info(f"Loading checkpoint from {ckpt_path}")
         checkpoint = torch.load(
-            CONFIG["resume_from_ckpt"],
-            map_location=lambda storage, loc: storage,
-            weights_only=False,
+            ckpt_path, map_location=lambda storage, loc: storage, weights_only=False
         )
         checkpoint["model"]["pos_embed"] = torch.clone(simple_model.pos_embed)
         checkpoint["ema"]["pos_embed"] = torch.clone(simple_model.pos_embed)
@@ -277,9 +290,7 @@ if CONFIG["resume_from_ckpt"]:
         logger.info(f"Resuming from step {train_steps}")
         torch.manual_seed(seed + train_steps)
     else:
-        raise FileNotFoundError(
-            f"Checkpoint file {CONFIG['resume_from_ckpt']} not found."
-        )
+        raise FileNotFoundError(f"Checkpoint file {ckpt_path} not found.")
 
 
 # Prepare models for training
@@ -306,24 +317,23 @@ def compute_loss(model, x, phone, speaker_id, length):
     return loss
 
 
+use_bfloat16 = training_config.get("use_bfloat16", False)
+logger.info(f"Use bfloat16: {use_bfloat16}")
+
 while True:
-    if train_steps % CONFIG["ckpt_every"] == 0:
-        seed = CONFIG["seed"] * (train_steps + 1) * WORLD_SIZE + RANK
+    if train_steps % training_config["ckpt_every"] == 0:
+        seed = training_config["seed"] * (train_steps + 1) * WORLD_SIZE + RANK
         torch.manual_seed(seed)
 
-    length = int(2 ** (5 + train_steps / 10_000))
-    length = min(length, CONFIG["input_size"])
-    batch_size = (
-        opt_config["global_batch_size"]
-        // WORLD_SIZE
-        // int(2 ** int(train_steps / 10_000))
-    )
+    length = int(opt_config["initial_input_size"] * 2 ** (train_steps / 10_000))
+    length = min(length, model_config["input_size"])
+    batch_size = opt_config["global_batch_size"] // WORLD_SIZE
+    if opt_config["constant_memory"]:
+        batch_size = batch_size // (length // opt_config["initial_input_size"])
 
     x, (speaker_id, phone) = get_batch(train_steps, batch_size, seq_len=length)
 
-    with torch.autocast(
-        device_type="cuda", dtype=torch.bfloat16, enabled=CONFIG["use_bfloat16"]
-    ):
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bfloat16):
         loss = compute_loss(model, x, phone, speaker_id, length=length)
     opt.zero_grad()
     loss.backward()
@@ -338,7 +348,7 @@ while True:
     train_steps += 1
 
     # Save DiT checkpoint:
-    if train_steps % CONFIG["ckpt_every"] == 0 and train_steps > 0:
+    if train_steps % training_config["ckpt_every"] == 0 and train_steps > 0:
         if RANK == 0:
             checkpoint = {
                 "model": simple_model.state_dict(),
@@ -354,7 +364,7 @@ while True:
         if IS_DISTRIBUTED:
             dist.barrier()
 
-    if train_steps % CONFIG["log_every"] == 0:
+    if train_steps % training_config["log_every"] == 0:
         # Measure training speed:
         torch.cuda.synchronize()
         end_time = time()
@@ -369,7 +379,7 @@ while True:
         )
 
         # Log to wandb
-        if RANK == 0 and CONFIG["enable_wandb"]:
+        if RANK == 0 and wandb_config["enable"]:
             wandb.log(
                 {
                     "avg_loss": avg_loss,

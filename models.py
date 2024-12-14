@@ -168,11 +168,12 @@ class LabelEmbedder(nn.Module):
 
     def __init__(self, num_classes, hidden_size, dropout_prob):
         super().__init__()
+        # use last class as unconditional value
         use_cfg_embedding = dropout_prob > 0
-        self.phone_table = nn.Embedding(num_classes + use_cfg_embedding, hidden_size)
-        self.speaker_id_table = nn.Embedding(
-            num_classes + use_cfg_embedding, hidden_size
-        )
+        if use_cfg_embedding:
+            self.unconditional_value = num_classes - 1
+        self.phone_table = nn.Embedding(num_classes, hidden_size)
+        self.speaker_id_table = nn.Embedding(num_classes, hidden_size)
         self.num_classes = num_classes
         self.dropout_prob = dropout_prob
 
@@ -187,8 +188,10 @@ class LabelEmbedder(nn.Module):
             )
         else:
             drop_ids = force_drop_ids == 1
-        speaker_id = torch.where(drop_ids[:, None], self.num_classes, speaker_id)
-        phone = torch.where(drop_ids[:, None], self.num_classes, phone)
+        speaker_id = torch.where(
+            drop_ids[:, None], self.unconditional_value, speaker_id
+        )
+        phone = torch.where(drop_ids[:, None], self.unconditional_value, phone)
         return speaker_id, phone
 
     def forward(self, speaker_id, phone, train, force_drop_ids=None):
@@ -275,6 +278,7 @@ class DiT(nn.Module):
         mlp_ratio=4.0,
         class_dropout_prob=0.1,
         learn_sigma=True,
+        embedding_vocab_size=1024,
     ):
         super().__init__()
         self.input_size = input_size
@@ -286,7 +290,9 @@ class DiT(nn.Module):
 
         self.x_embedder = nn.Linear(in_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
-        self.y_embedder = LabelEmbedder(1024, hidden_size, class_dropout_prob)
+        self.y_embedder = LabelEmbedder(
+            embedding_vocab_size, hidden_size, class_dropout_prob
+        )
         # Will use fixed sin-cos embedding:
         self.register_buffer("pos_embed", torch.zeros(1, self.input_size, hidden_size))
 

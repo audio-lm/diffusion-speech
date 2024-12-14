@@ -28,13 +28,39 @@ git lfs install
 ```
 
 
+Prepare the training data for duration model.
+
+```
+uv run prepare_duration_data.py \
+--wav-dir /tmp/data/LibriTTS_R/train-clean-360 \
+--textgrid-dir /tmp/data/libritts-r-aligned/data \
+--output-dir /tmp/data
+```
+
+
+Start training the duration model.
+
+```
+uv run train.py --config configs/train_duration_dit_s.yaml
+```
+
+Sample from the duration model.
+
+```
+uv run sample.py \
+--config configs/train_duration_dit_s.yaml \
+--ckpt results/duration/000-DiT-S/checkpoints/0100000.pt \
+--cfg-scale 4 \
+--num-sampling-steps 1000
+```
+
 Prepare the training data for acoustic model.
 
 ```
 uv run prepare_acoustic_data.py \
 --wav-dir /tmp/data/LibriTTS_R/train-clean-360 \
 --textgrid-dir /tmp/data/libritts-r-aligned/data \
---output-dir /tmp/data/acoustic
+--output-dir /tmp/data
 ```
 
 
@@ -42,4 +68,14 @@ Start training the acoustic model.
 
 ```
 uv run train.py --config configs/train_acoustic_dit_b.yaml
+```
+
+Sample from the acoustic model.
+
+```
+uv run sample.py \
+--config configs/train_acoustic_dit_b.yaml \
+--ckpt results/acoustic/000-DiT-B/checkpoints/0100000.pt \
+--cfg-scale 4 \
+--num-sampling-steps 1000
 ```

@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import shutil
 from dataclasses import dataclass
@@ -290,27 +291,17 @@ total_mel_length = load_data(
     n_mels=N_MELS,
 )
 
+# Load mapping dictionaries from JSON
+maps_path = Path(FLAGS.output_dir) / "maps.json"
+if not maps_path.exists():
+    raise FileNotFoundError(
+        f"maps.json not found at {maps_path}. Please run prepare_duration_data.py first to generate the mapping files."
+    )
 
-# Get unique speaker IDs and phones
-# Load all .npy files and extract unique speaker IDs and phones
-
-speaker_ids = set()
-all_phones = set()
-mel_dir = Path(FLAGS.output_dir) / "mel"
-for npy_file in mel_dir.glob("*.npy"):
-    record = np.load(npy_file, allow_pickle=True).item()
-    speaker_ids.add(record["speaker_id"])
-    all_phones.update(record["phones"])
-
-speaker_ids = sorted(list(speaker_ids))
-all_phones = sorted(list(all_phones))
-
-print("Unique speaker IDs:", speaker_ids)
-print("\nUnique phones:", all_phones)
-
-# Create mapping dictionaries for speaker IDs and phones
-speaker_id_to_idx = {speaker_id: idx for idx, speaker_id in enumerate(speaker_ids)}
-phone_to_idx = {phone: idx for idx, phone in enumerate(all_phones)}
+with open(maps_path, "r") as f:
+    maps = json.load(f)
+    speaker_id_to_idx = maps["speaker_id_to_idx"]
+    phone_to_idx = maps["phone_to_idx"]
 
 # First pass - compute total length
 # pad = phone_to_idx['PAD']
@@ -325,6 +316,7 @@ mmap_file = np.memmap(
 
 # Second pass - write data
 current_idx = 0
+mel_dir = Path(FLAGS.output_dir) / "mel"
 for npy_file in sorted(mel_dir.glob("*.npy")):
     record = np.load(npy_file, allow_pickle=True).item()
     phones = np.array([phone_to_idx[phone] for phone in record["phones"]])

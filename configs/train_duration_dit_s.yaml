@@ -1,10 +1,10 @@
 model:
-  name: DiT-B
-  input_size: 8192
+  name: DiT-S
+  input_size: 512
   embedding_vocab_size: 1024
   learn_sigma: true
 optimization:
-  constant_memory: true
+  constant_memory: false
   epochs: 1400
   global_batch_size: 512
   initial_input_size: 32
@@ -17,10 +17,10 @@ optimization:
   loss:
     num_timesteps: 1000
 data:
-  data_path: /tmp/data/acoustic.npy
-  data_dim: 100
-  data_std: 2.0
-  data_mean: -1.0
+  data_path: /tmp/data/duration.npy
+  data_dim: 1
+  data_std: 0.067776896
+  data_mean: 0.08663661
   normalize: true
 training:
   enable_compile: true
@@ -28,7 +28,7 @@ training:
   seed: 42
   ckpt_every: 10_000
   log_every: 1000
-  results_dir: results/acoustic
+  results_dir: results/duration
   resume_from_ckpt: null
   wandb:
     enable: true
