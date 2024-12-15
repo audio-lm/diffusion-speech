@@ -88,7 +88,6 @@ samples = sample(
     phone=torch_phoneme_indices,
 )
 phoneme_durations = samples[-1][0, 0]
-phoneme_durations = phoneme_durations.clamp(min=-5.0, max=3.0)
 # plot phoneme durations and save to file
 plt.figure(figsize=(12, 4))
 durations = phoneme_durations.cpu().numpy()
