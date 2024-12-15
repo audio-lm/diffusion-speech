@@ -10,12 +10,12 @@
 # --------------------------------------------------------
 
 import math
-from typing import Optional
 
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.nn import functional as F
+import torch.nn.functional as F
+from torch.nn.attention.flex_attention import BlockMask, flex_attention
 
 
 class Mlp(nn.Module):
@@ -82,10 +82,7 @@ class Attention(nn.Module):
         self.q_norm = RMSNorm(self.head_dim, eps=1e-5)
         self.k_norm = RMSNorm(self.head_dim, eps=1e-5)
 
-    def forward(
-        self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None
-    ) -> torch.Tensor:
-        del attn_mask
+    def forward(self, x: torch.Tensor, attn_mask=None) -> torch.Tensor:
         B, N, C = x.shape
         qkv = (
             self.qkv(x)
@@ -93,15 +90,23 @@ class Attention(nn.Module):
             .permute(2, 0, 3, 1, 4)
         )
         q, k, v = qkv.unbind(0)
-        q = self.q_norm(q)
-        k = self.k_norm(k)
-        x = F.scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            dropout_p=0.0,
-            is_causal=False,
-        )
+
+        if isinstance(attn_mask, torch.Tensor) or attn_mask is None:
+            q = self.q_norm(q)
+            k = self.k_norm(k)
+            # v = v
+            x = F.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=attn_mask,
+            )
+        elif isinstance(attn_mask, BlockMask):
+            with torch.autocast(enabled=False, device_type="cuda"):
+                q = self.q_norm(q).half()
+                k = self.k_norm(k).half()
+                v = v.half()
+                x = flex_attention(q, k, v, block_mask=attn_mask)
         x = x.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         return x
@@ -231,11 +236,13 @@ class DiTBlock(nn.Module):
             nn.Linear(hidden_size, 6 * hidden_size, bias=True),
         )
 
-    def forward(self, x, c):
+    def forward(self, x, c, attn_mask=None):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
             self.adaLN_modulation(c).chunk(6, dim=-1)
         )
-        x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
+        x = x + gate_msa * self.attn(
+            modulate(self.norm1(x), shift_msa, scale_msa), attn_mask=attn_mask
+        )
         x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
 
@@ -344,9 +351,7 @@ class DiT(nn.Module):
         nn.init.constant_(self.final_layer.linear.weight, 0)
         nn.init.constant_(self.final_layer.linear.bias, 0)
 
-    def forward(
-        self, x, t, phone, speaker_id, attn_mask: Optional[torch.Tensor] = None
-    ):
+    def forward(self, x, t, phone, speaker_id, attn_mask=None):
         """
         Forward pass of DiT.
         x: (N, C, L) tensor of spatial inputs
@@ -365,19 +370,19 @@ class DiT(nn.Module):
         x = x.transpose(-1, -2)  # Swap last two dimensions
         x = self.x_embedder(x) + self.pos_embed[:, : x.shape[1], :]  # (N, L, D)
         for block in self.blocks:
-            x = block(x, c)  # (N, L, D)
+            x = block(x, c, attn_mask=attn_mask)  # (N, L, D)
         x = self.final_layer(x, c)  # (N, L, 2 * out_channels)
         x = x.transpose(-1, -2)  # Swap last two dimensions
         return x
 
-    def forward_with_cfg(self, x, t, phone, speaker_id, cfg_scale):
+    def forward_with_cfg(self, x, t, phone, speaker_id, cfg_scale, attn_mask=None):
         """
         Forward pass of DiT, but also batches the unconditional forward pass for classifier-free guidance.
         """
         # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
         half = x[: len(x) // 2]
         combined = torch.cat([half, half], dim=0)
-        model_out = self.forward(combined, t, phone, speaker_id)
+        model_out = self.forward(combined, t, phone, speaker_id, attn_mask=attn_mask)
         # For exact reproducibility reasons, we apply classifier-free guidance on only
         # three channels by default. The standard approach to cfg applies it to all channels.
         # This can be done by uncommenting the following line and commenting-out the line following that.

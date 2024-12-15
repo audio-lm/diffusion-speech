@@ -9,8 +9,12 @@ optimization:
   global_batch_size: 512
   initial_input_size: 32
   learning_rate: 1.0e-4
+  min_lr: 1.0e-5
+  warmup_iters: 10000
+  lr_decay_iters: 100000
+  decay_lr: true
   weight_decay: 0.0
-  max_grad_norm: 1.0
+  max_grad_norm: 20.0
   betas:
     beta1: 0.9
     beta2: 0.999
@@ -25,9 +29,10 @@ data:
 training:
   enable_compile: true
   use_bfloat16: true
+  use_block_mask: false
   seed: 42
   ckpt_every: 10_000
-  log_every: 1000
+  log_every: 100
   results_dir: results/duration
   resume_from_ckpt: null
   wandb:

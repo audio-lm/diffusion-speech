@@ -79,3 +79,19 @@ uv run sample.py \
 --cfg-scale 4 \
 --num-sampling-steps 1000
 ```
+
+Synthesize a given text using the trained Dit models.
+
+```
+# run once to download nltk data
+uv run python -c "import nltk; nltk.download('cmudict'); nltk.download('averaged_perceptron_tagger_eng')"
+
+uv run synthesize.py \
+--duration-model-config ./configs/train_duration_dit_s.yaml \
+--acoustic-model-config ./configs/train_acoustic_dit_b.yaml \
+--duration-model-checkpoint results/duration/000-DiT-S/checkpoints/0120000.pt \
+--acoustic-model-checkpoint results/acoustic/000-DiT-B/checkpoints/0120000.pt \
+--speaker-id 134 \
+--output-file ./audio.wav \
+--text "Diffusion Speech Generation Model"
+```

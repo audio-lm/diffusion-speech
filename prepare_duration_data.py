@@ -159,6 +159,14 @@ mmap_file = np.memmap(
 
 # Second pass - write data
 current_idx = 0
+# Initialize random number generator with seed
+rng = np.random.Generator(np.random.PCG64(42))
+
+# Shuffle the data
+data = list(data)
+rng.shuffle(data)
+
+
 for speaker_id, phone_data in data:
     length = len(phone_data)
 

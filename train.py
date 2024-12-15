@@ -13,6 +13,7 @@ A minimal training script for DiT using PyTorch DDP.
 import argparse
 import inspect
 import logging
+import math
 import os
 from collections import OrderedDict
 from copy import deepcopy
@@ -20,6 +21,7 @@ from glob import glob
 from time import time
 
 import torch
+from torch.nn.attention.flex_attention import create_block_mask
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -303,6 +305,25 @@ running_loss = 0
 start_time = time()
 
 
+# learning rate decay scheduler (cosine with warmup)
+def get_lr(it):
+    # 1) linear warmup for warmup_iters steps
+    if it < opt_config["warmup_iters"]:
+        return opt_config["learning_rate"] * (it + 1) / (opt_config["warmup_iters"] + 1)
+    # 2) if it > lr_decay_iters, return min learning rate
+    if it > opt_config["lr_decay_iters"]:
+        return opt_config["min_lr"]
+    # 3) in between, use cosine decay down to min learning rate
+    decay_ratio = (it - opt_config["warmup_iters"]) / (
+        opt_config["lr_decay_iters"] - opt_config["warmup_iters"]
+    )
+    assert 0 <= decay_ratio <= 1
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
+    return opt_config["min_lr"] + coeff * (
+        opt_config["learning_rate"] - opt_config["min_lr"]
+    )
+
+
 def compute_loss(model, x, phone, speaker_id, length):
     """
     Compute loss for a batch of data
@@ -311,7 +332,30 @@ def compute_loss(model, x, phone, speaker_id, length):
     phone = phone[..., :length].to(DEVICE)
     speaker_id = speaker_id.to(DEVICE)
     t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=x.device)
-    model_kwargs = dict(phone=phone, speaker_id=speaker_id)
+    if training_config.get("use_block_mask", False):
+        B = speaker_id.shape[0]
+        S = speaker_id.shape[1]
+
+        def document_masking(b, h, q_idx, kv_idx):
+            del h
+            A = speaker_id[b, q_idx]
+            B = speaker_id[b, kv_idx]
+            return A == B
+
+        attn_mask = create_block_mask(
+            document_masking,
+            B=B,
+            H=1,
+            Q_LEN=S,
+            KV_LEN=S,
+            device="cuda",
+            _compile=True,
+            BLOCK_SIZE=128,
+        )
+    else:
+        attn_mask = speaker_id[:, None, :] == speaker_id[:, :, None]
+        attn_mask = attn_mask.unsqueeze(1)
+    model_kwargs = dict(phone=phone, speaker_id=speaker_id, attn_mask=attn_mask)
     loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
     loss = loss_dict["loss"].float().mean()
     return loss
@@ -320,9 +364,17 @@ def compute_loss(model, x, phone, speaker_id, length):
 use_bfloat16 = training_config.get("use_bfloat16", False)
 logger.info(f"Use bfloat16: {use_bfloat16}")
 
+logger.info(f"Use learning rate decay: {opt_config['decay_lr']}")
+
 while True:
+    # determine and set the learning rate for this iteration
+    lr = get_lr(train_steps) if opt_config["decay_lr"] else opt_config["learning_rate"]
+    for param_group in opt.param_groups:
+        param_group["lr"] = lr
+
     if train_steps % training_config["ckpt_every"] == 0:
         seed = training_config["seed"] * (train_steps + 1) * WORLD_SIZE + RANK
+        logger.info(f"Setting seed to {seed} at step {train_steps}")
         torch.manual_seed(seed)
 
     length = int(opt_config["initial_input_size"] * 2 ** (train_steps / 10_000))
@@ -357,6 +409,7 @@ while True:
                 "config": CONFIG,
                 "train_steps": train_steps,
                 "batch_size": batch_size,
+                "lr": lr,
             }
             checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
             torch.save(checkpoint, checkpoint_path)
@@ -387,6 +440,7 @@ while True:
                     "step": train_steps,
                     "grad_norm": grad_norm,
                     "length": length,
+                    "lr": lr,
                 }
             )
 

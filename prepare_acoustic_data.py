@@ -317,7 +317,11 @@ mmap_file = np.memmap(
 # Second pass - write data
 current_idx = 0
 mel_dir = Path(FLAGS.output_dir) / "mel"
-for npy_file in sorted(mel_dir.glob("*.npy")):
+npy_files = sorted(mel_dir.glob("*.npy"))
+rng = np.random.Generator(np.random.PCG64(42))
+rng.shuffle(npy_files)
+
+for npy_file in npy_files:
     record = np.load(npy_file, allow_pickle=True).item()
     phones = np.array([phone_to_idx[phone] for phone in record["phones"]])
     length = len(phones)

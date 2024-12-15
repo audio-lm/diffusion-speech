@@ -17,10 +17,8 @@ import os
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import numpy as np
-import soundfile as sf
 import torch
 import yaml
-from vocos import Vocos
 
 from diffusion import create_diffusion
 from models import DiT_models
@@ -76,40 +74,19 @@ def get_batch(
     phone = torch.from_numpy(phone).to(DEVICE)
     speaker_id = torch.from_numpy(speaker_id).to(DEVICE)
 
-    return x, (speaker_id, phone)
+    return x, speaker_id, phone
 
 
-def main(args):
-    with open(args.config, "r") as f:
+def get_data(config_path, seed=0):
+    with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
     data_config = config["data"]
     model_config = config["model"]
-
-    # Setup PyTorch:
-    torch.manual_seed(args.seed)
-    torch.set_grad_enabled(False)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    # Load model:
-    model = DiT_models[model_config["name"]](
-        input_size=model_config["input_size"],
-        embedding_vocab_size=model_config["embedding_vocab_size"],
-        learn_sigma=model_config["learn_sigma"],
-        in_channels=data_config["data_dim"],
-    ).to(device)
 
-    ckpt_path = args.ckpt
-    state_dict = find_model(ckpt_path)
-    model.load_state_dict(state_dict)
-    model.eval()  # important!
-    diffusion = create_diffusion(str(args.num_sampling_steps))
-    n = 1
-    z = torch.randn(
-        n, data_config["data_dim"], model_config["input_size"], device=device
-    )
-
-    x, (speaker_id, phone) = get_batch(
-        args.seed,
+    x, speaker_id, phone = get_batch(
+        seed,
         1,
         seq_len=model_config["input_size"],
         DEVICE=device,
@@ -119,29 +96,10 @@ def main(args):
         data_std=data_config["data_std"],
     )
 
-    samples = x.to(device).float()
+    return x, speaker_id, phone
 
-    # Setup classifier-free guidance:
-    z = torch.cat([z, z], 0)
-    unconditional_value = model.y_embedder.unconditional_value
-    phone_null = torch.full_like(phone, unconditional_value)
-    speaker_id_null = torch.full_like(speaker_id, unconditional_value)
-    phone = torch.cat([phone, phone_null], 0)
-    speaker_id = torch.cat([speaker_id, speaker_id_null], 0)
-    model_kwargs = dict(phone=phone, speaker_id=speaker_id, cfg_scale=args.cfg_scale)
 
-    # Sample images:
-    samples = diffusion.p_sample_loop(
-        model.forward_with_cfg,
-        z.shape,
-        z,
-        clip_denoised=False,
-        model_kwargs=model_kwargs,
-        progress=True,
-        device=device,
-    )
-    samples = [s.chunk(2, dim=0)[0] for s in samples]  # Remove null class samples
-
+def plot_samples(samples, x):
     # Create figure and axis
     fig, ax = plt.subplots(figsize=(20, 4))
     plt.tight_layout()
@@ -149,6 +107,14 @@ def main(args):
     # Function to update frame
     def update(frame):
         ax.clear()
+        ax.text(
+            0.02,
+            0.98,
+            f"{frame+1} / 1000",
+            transform=ax.transAxes,
+            verticalalignment="top",
+            color="black",
+        )
         if samples[frame].shape[1] > 1:
             im = ax.imshow(
                 samples[frame].cpu().numpy()[0],
@@ -158,22 +124,12 @@ def main(args):
                 vmin=-5,
                 vmax=5,
             )
+            return [im]
         elif samples[frame].shape[1] == 1:
-            im = ax.plot(samples[frame].cpu().numpy()[0, 0])[
-                0
-            ]  # Get the Line2D artist object
+            line1 = ax.plot(samples[frame].cpu().numpy()[0, 0])[0]
+            line2 = ax.plot(x.cpu().numpy()[0, 0])[0]
             plt.ylim(-10, 10)
-        else:
-            raise ValueError(f"Invalid sample shape: {samples[frame].shape}")
-        ax.text(
-            0.02,
-            0.98,
-            f"{frame+1} / 1000",
-            transform=ax.transAxes,
-            verticalalignment="top",
-            color="black",
-        )
-        return [im]
+            return [line1, line2]
 
     from tqdm import tqdm
 
@@ -191,6 +147,71 @@ def main(args):
     plt.close()
 
 
+def sample(
+    config_path,
+    ckpt_path,
+    cfg_scale=4.0,
+    num_sampling_steps=1000,
+    seed=0,
+    speaker_id=None,
+    phone=None,
+):
+    torch.manual_seed(seed)
+    torch.set_grad_enabled(False)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+
+    data_config = config["data"]
+    model_config = config["model"]
+
+    # Load model:
+    model = DiT_models[model_config["name"]](
+        input_size=model_config["input_size"],
+        embedding_vocab_size=model_config["embedding_vocab_size"],
+        learn_sigma=model_config["learn_sigma"],
+        in_channels=data_config["data_dim"],
+    ).to(device)
+
+    state_dict = find_model(ckpt_path)
+    model.load_state_dict(state_dict)
+    model.eval()  # important!
+    diffusion = create_diffusion(str(num_sampling_steps))
+    n = 1
+    z = torch.randn(n, data_config["data_dim"], speaker_id.shape[1], device=device)
+
+    attn_mask = speaker_id[:, None, :] == speaker_id[:, :, None]
+    attn_mask = attn_mask.unsqueeze(1)
+    attn_mask = torch.cat([attn_mask, attn_mask], 0)
+    # Setup classifier-free guidance:
+    z = torch.cat([z, z], 0)
+    unconditional_value = model.y_embedder.unconditional_value
+    phone_null = torch.full_like(phone, unconditional_value)
+    speaker_id_null = torch.full_like(speaker_id, unconditional_value)
+    phone = torch.cat([phone, phone_null], 0)
+    speaker_id = torch.cat([speaker_id, speaker_id_null], 0)
+    model_kwargs = dict(
+        phone=phone,
+        speaker_id=speaker_id,
+        cfg_scale=cfg_scale,
+        attn_mask=attn_mask,
+    )
+
+    # Sample images:
+    samples = diffusion.p_sample_loop(
+        model.forward_with_cfg,
+        z.shape,
+        z,
+        clip_denoised=False,
+        model_kwargs=model_kwargs,
+        progress=True,
+        device=device,
+    )
+    samples = [s.chunk(2, dim=0)[0] for s in samples]  # Remove null class samples
+    return samples
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True)
@@ -199,4 +220,14 @@ if __name__ == "__main__":
     parser.add_argument("--num-sampling-steps", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
-    main(args)
+    x, speaker_id, phone = get_data(args.config, args.seed)
+    samples = sample(
+        args.config,
+        args.ckpt,
+        args.cfg_scale,
+        args.num_sampling_steps,
+        args.seed,
+        speaker_id,
+        phone,
+    )
+    plot_samples(samples, x)
