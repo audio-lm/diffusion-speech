@@ -84,7 +84,8 @@ Synthesize a given text using the trained Dit models.
 
 ```
 # run once to download nltk data
-uv run python -c "import nltk; nltk.download('cmudict'); nltk.download('averaged_perceptron_tagger_eng')"
+uv run python -c "import nltk; nltk.download('cmudict')"
+uv run python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng')"
 
 uv run synthesize.py \
 --duration-model-config ./configs/train_duration_dit_s.yaml \
