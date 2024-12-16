@@ -4,9 +4,6 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""
-Sample new images from a pre-trained DiT.
-"""
 import torch
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -19,6 +16,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import yaml
+from tqdm import tqdm
 
 from diffusion import create_diffusion
 from models import DiT_models
@@ -45,7 +43,7 @@ def get_batch(
         data_file,
         dtype=np.float16,
         mode="r",
-        shape=(arr.shape[0] // (data_dim + 2), data_dim + 2),
+        shape=(arr.shape[0] // (data_dim + 3), data_dim + 3),
     )
 
     # Create random number generator
@@ -57,7 +55,7 @@ def get_batch(
     ).astype(np.int64)
 
     # Create batch data array
-    batch_data = np.zeros((batch_size, seq_len, data_dim + 2), dtype=np.float16)
+    batch_data = np.zeros((batch_size, seq_len, data_dim + 3), dtype=np.float16)
     # Fill batch data one sequence at a time
     for i, start_idx in enumerate(start_indices):
         batch_data[i] = arr[start_idx : start_idx + seq_len]
@@ -67,14 +65,16 @@ def get_batch(
     x = np.moveaxis(x, 1, 2)
     phone = batch_data[:, :, data_dim].astype(np.int32)
     speaker_id = batch_data[:, :, data_dim + 1].astype(np.int32)
+    phone_kind = batch_data[:, :, data_dim + 2].astype(np.int32)
 
     # convert to torch tensors
     x = torch.from_numpy(x).to(DEVICE)
     x = (x - data_mean) / data_std
     phone = torch.from_numpy(phone).to(DEVICE)
     speaker_id = torch.from_numpy(speaker_id).to(DEVICE)
+    phone_kind = torch.from_numpy(phone_kind).to(DEVICE)
 
-    return x, speaker_id, phone
+    return x, speaker_id, phone, phone_kind
 
 
 def get_data(config_path, seed=0):
@@ -85,7 +85,7 @@ def get_data(config_path, seed=0):
     model_config = config["model"]
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    x, speaker_id, phone = get_batch(
+    x, speaker_id, phone, phone_kind = get_batch(
         seed,
         1,
         seq_len=model_config["input_size"],
@@ -96,7 +96,7 @@ def get_data(config_path, seed=0):
         data_std=data_config["data_std"],
     )
 
-    return x, speaker_id, phone
+    return x, speaker_id, phone, phone_kind
 
 
 def plot_samples(samples, x):
@@ -131,8 +131,6 @@ def plot_samples(samples, x):
             plt.ylim(-10, 10)
             return [line1, line2]
 
-    from tqdm import tqdm
-
     # Create animation with progress bar
     anim = animation.FuncAnimation(
         fig,
@@ -155,6 +153,7 @@ def sample(
     seed=0,
     speaker_id=None,
     phone=None,
+    phone_kind=None,
 ):
     torch.manual_seed(seed)
     torch.set_grad_enabled(False)
@@ -191,14 +190,16 @@ def sample(
     speaker_id_null = torch.full_like(speaker_id, unconditional_value)
     phone = torch.cat([phone, phone_null], 0)
     speaker_id = torch.cat([speaker_id, speaker_id_null], 0)
+    phone_kind_null = torch.full_like(phone_kind, unconditional_value)
+    phone_kind = torch.cat([phone_kind, phone_kind_null], 0)
     model_kwargs = dict(
         phone=phone,
         speaker_id=speaker_id,
+        phone_kind=phone_kind,
         cfg_scale=cfg_scale,
         attn_mask=attn_mask,
     )
 
-    # Sample images:
     samples = diffusion.p_sample_loop(
         model.forward_with_cfg,
         z.shape,
@@ -220,7 +221,7 @@ if __name__ == "__main__":
     parser.add_argument("--num-sampling-steps", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
-    x, speaker_id, phone = get_data(args.config, args.seed)
+    x, speaker_id, phone, phone_kind = get_data(args.config, args.seed)
     samples = sample(
         args.config,
         args.ckpt,
@@ -229,5 +230,6 @@ if __name__ == "__main__":
         args.seed,
         speaker_id,
         phone,
+        phone_kind,
     )
     plot_samples(samples, x)

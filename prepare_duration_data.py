@@ -2,19 +2,14 @@
 
 import argparse
 import json
-import os
-import shutil
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import List
 
-import matplotlib.pyplot as plt
 import numpy as np
 import textgrid
-import torch
-import torchaudio
 from tqdm import tqdm
-from vocos.feature_extractors import MelSpectrogramFeatures
 
 
 def parse_args():
@@ -31,36 +26,48 @@ output_dir = Path(FLAGS.output_dir)
 output_dir.mkdir(parents=True, exist_ok=True)
 
 
-@dataclass
-class Interval:
-    start_sample: int  # Start position in audio samples
-    end_sample: int  # End position in audio samples
-    start_frame: int  # Start position in spectrogram frames
-    end_frame: int  # End position in spectrogram frames
-    phone: str  # Phone label for this interval
-
-
-@dataclass
-class TextGridData:
-    intervals: List[Interval]
-
-
 def read_textgrid(tg_path: Path) -> List[str]:
+    """Read a TextGrid file and extract phone durations and kinds.
+
+    Args:
+        tg_path: Path to TextGrid file
+
+    Returns:
+        List of tuples containing (phone, duration, phone_kind)
+        Total duration of the file
+    """
     # Read TextGrid file
     tg = textgrid.TextGrid.fromFile(tg_path)
 
-    # Get the phones tier (index 1)
+    words_tier = tg[0]
     phones_tier = tg[1]
 
-    # Convert intervals to our dataclass
-    intervals = []
-    prev_end_frame = None
     data = []
+    current_word_idx = 0
+
     for interval in phones_tier.intervals:
         phone = "EMPTY" if interval.mark == "" else interval.mark.upper()
         duration = interval.maxTime - interval.minTime
-        data.append((phone, duration))
-    return data
+        if phone == "EMPTY":
+            phone_kind = "EMPTY"
+            current_word_idx += 1
+        elif (
+            interval.minTime == words_tier.intervals[current_word_idx].minTime
+            and interval.maxTime == words_tier.intervals[current_word_idx].maxTime
+        ):
+            phone_kind = "WORD"
+            current_word_idx += 1
+        elif interval.minTime == words_tier.intervals[current_word_idx].minTime:
+            phone_kind = "START"
+        elif interval.maxTime == words_tier.intervals[current_word_idx].maxTime:
+            phone_kind = "END"
+            current_word_idx += 1
+        else:
+            phone_kind = "MIDDLE"
+
+        data.append((phone, duration, phone_kind))
+
+    return data, tg.maxTime
 
 
 def get_speaker_id(wav_path: Path) -> str:
@@ -94,25 +101,28 @@ def load_data(textgrid_path: Path, wav_path: Path) -> int:
     print(f"Number of matching pairs: {matching_pairs}")
     # Process all matching files
     data = []
+    speaker_durations = defaultdict(float)
     for file_stem in tqdm(wav_files_dict, desc="Processing files"):
         if file_stem not in textgrid_files_dict:
             continue
-
         try:
             wav_file = wav_files_dict[file_stem]
             textgrid_file = textgrid_files_dict[file_stem]
             speaker_id = get_speaker_id(wav_file)
-            phones = read_textgrid(textgrid_file)
+            phones, duration = read_textgrid(textgrid_file)
             data.append((speaker_id, phones))
+            speaker_durations[speaker_id] += duration
         except Exception as e:
             print(f"Error processing {file_stem}: {str(e)}")
             continue
 
-    return data
+    return data, speaker_durations
 
 
 # Test the function
-data = load_data(textgrid_path=Path(FLAGS.textgrid_dir), wav_path=Path(FLAGS.wav_dir))
+data, speaker_durations = load_data(
+    textgrid_path=Path(FLAGS.textgrid_dir), wav_path=Path(FLAGS.wav_dir)
+)
 
 # Get unique speaker IDs and phones from data
 speaker_ids = set()
@@ -120,10 +130,12 @@ all_phones = set()
 
 for speaker_id, phone_data in data:
     speaker_ids.add(speaker_id)
-    for phone, duration in phone_data:
+    for phone, duration, kind in phone_data:
         all_phones.add(phone)
 
-speaker_ids = sorted(list(speaker_ids))
+speaker_ids = sorted(
+    list(speaker_ids), key=lambda x: speaker_durations[x], reverse=True
+)
 all_phones = sorted(list(all_phones))
 
 print("Unique speaker IDs:", speaker_ids)
@@ -136,10 +148,20 @@ phone_to_idx = {phone: idx for idx, phone in enumerate(all_phones)}
 if "PAD" not in phone_to_idx:
     phone_to_idx["PAD"] = len(phone_to_idx)
 
+
+phone_kind_to_idx = {
+    "EMPTY": 0,
+    "WORD": 1,
+    "START": 2,
+    "END": 3,
+    "MIDDLE": 4,
+}
+
 # Export mapping dictionaries to JSON
 maps = {
     "speaker_id_to_idx": speaker_id_to_idx,
     "phone_to_idx": phone_to_idx,
+    "phone_kind_to_idx": phone_kind_to_idx,
 }
 with open(Path(FLAGS.output_dir) / "maps.json", "w") as f:
     json.dump(maps, f, indent=2)
@@ -154,7 +176,7 @@ mmap_file = np.memmap(
     Path(FLAGS.output_dir) / "duration.npy",
     dtype=np.float16,
     mode="w+",
-    shape=(total_length, 3),  # [duration, phone_idx, speaker_idx]
+    shape=(total_length, 4),  # [duration, phone_idx, speaker_idx, phone_kind]
 )
 
 # Second pass - write data
@@ -171,12 +193,11 @@ for speaker_id, phone_data in data:
     length = len(phone_data)
 
     # Convert phones and durations to arrays
-    phones = np.array(
-        [phone_to_idx[phone] for phone, _ in phone_data], dtype=np.float16
-    )
-    speaker_idx = np.full(length, speaker_id_to_idx[speaker_id], dtype=np.float16)
-    durations = np.array([duration for _, duration in phone_data], dtype=np.float16)
+    phones = [phone_to_idx[phone] for phone, _, _ in phone_data]
+    speaker_idx = speaker_id_to_idx[speaker_id]
+    durations = [duration for _, duration, _ in phone_data]
     durations = np.clip(durations, 0, 1)
+    phone_kinds = [phone_kind_to_idx[kind] for _, _, kind in phone_data]
 
     # Write to memmap
     start_index = current_idx
@@ -184,6 +205,8 @@ for speaker_id, phone_data in data:
     mmap_file[start_index:end_index, 0] = durations
     mmap_file[start_index:end_index, 1] = phones
     mmap_file[start_index:end_index, 2] = speaker_idx
+    mmap_file[start_index:end_index, 3] = phone_kinds
     current_idx = end_index
 
 mmap_file.flush()
+del mmap_file

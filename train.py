@@ -196,7 +196,7 @@ def get_batch(step, batch_size, seq_len):
         data_path,
         dtype=np.float16,
         mode="r",
-        shape=(arr.shape[0] // (data_dim + 2), data_dim + 2),
+        shape=(arr.shape[0] // (data_dim + 3), data_dim + 3),
     )
 
     # Create random number generator
@@ -209,7 +209,7 @@ def get_batch(step, batch_size, seq_len):
     ).astype(np.int64)
 
     # Create batch data array
-    batch_data = np.zeros((batch_size, seq_len, data_dim + 2), dtype=np.float16)
+    batch_data = np.zeros((batch_size, seq_len, data_dim + 3), dtype=np.float16)
     # Fill batch data one sequence at a time
     for i, start_idx in enumerate(start_indices):
         batch_data[i] = arr[start_idx : start_idx + seq_len]
@@ -219,6 +219,7 @@ def get_batch(step, batch_size, seq_len):
     x = np.moveaxis(x, 1, 2)
     phone = batch_data[:, :, data_dim].astype(np.int32)
     speaker_id = batch_data[:, :, data_dim + 1].astype(np.int32)
+    phone_kind = batch_data[:, :, data_dim + 2].astype(np.int32)
 
     # convert to torch tensors
     x = torch.from_numpy(x).to(DEVICE)
@@ -226,8 +227,8 @@ def get_batch(step, batch_size, seq_len):
         x = (x - data_config["data_mean"]) / data_config["data_std"]
     phone = torch.from_numpy(phone).to(DEVICE)
     speaker_id = torch.from_numpy(speaker_id).to(DEVICE)
-
-    return x, (speaker_id, phone)
+    phone_kind = torch.from_numpy(phone_kind).to(DEVICE)
+    return x, speaker_id, phone, phone_kind
 
 
 # Initialize model
@@ -324,13 +325,14 @@ def get_lr(it):
     )
 
 
-def compute_loss(model, x, phone, speaker_id, length):
+def compute_loss(model, x, speaker_id, phone, phone_kind, length):
     """
     Compute loss for a batch of data
     """
     x = x[..., :length].to(DEVICE).float()
     phone = phone[..., :length].to(DEVICE)
     speaker_id = speaker_id.to(DEVICE)
+    phone_kind = phone_kind.to(DEVICE)
     t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=x.device)
     if training_config.get("use_block_mask", False):
         B = speaker_id.shape[0]
@@ -355,7 +357,9 @@ def compute_loss(model, x, phone, speaker_id, length):
     else:
         attn_mask = speaker_id[:, None, :] == speaker_id[:, :, None]
         attn_mask = attn_mask.unsqueeze(1)
-    model_kwargs = dict(phone=phone, speaker_id=speaker_id, attn_mask=attn_mask)
+    model_kwargs = dict(
+        phone=phone, speaker_id=speaker_id, phone_kind=phone_kind, attn_mask=attn_mask
+    )
     loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
     loss = loss_dict["loss"].float().mean()
     return loss
@@ -383,10 +387,12 @@ while True:
     if opt_config["constant_memory"]:
         batch_size = batch_size // (length // opt_config["initial_input_size"])
 
-    x, (speaker_id, phone) = get_batch(train_steps, batch_size, seq_len=length)
+    x, speaker_id, phone, phone_kind = get_batch(
+        train_steps, batch_size, seq_len=length
+    )
 
     with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bfloat16):
-        loss = compute_loss(model, x, phone, speaker_id, length=length)
+        loss = compute_loss(model, x, speaker_id, phone, phone_kind, length=length)
     opt.zero_grad()
     loss.backward()
     grad_norm = torch.nn.utils.clip_grad_norm_(

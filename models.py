@@ -177,12 +177,13 @@ class LabelEmbedder(nn.Module):
         use_cfg_embedding = dropout_prob > 0
         if use_cfg_embedding:
             self.unconditional_value = num_classes - 1
-        self.phone_table = nn.Embedding(num_classes, hidden_size)
         self.speaker_id_table = nn.Embedding(num_classes, hidden_size)
+        self.phone_table = nn.Embedding(num_classes, hidden_size)
+        self.phone_kind_table = nn.Embedding(num_classes, hidden_size)
         self.num_classes = num_classes
         self.dropout_prob = dropout_prob
 
-    def token_drop(self, speaker_id, phone, force_drop_ids=None):
+    def token_drop(self, speaker_id, phone, phone_kind, force_drop_ids=None):
         """
         Drops labels to enable classifier-free guidance.
         """
@@ -197,15 +198,21 @@ class LabelEmbedder(nn.Module):
             drop_ids[:, None], self.unconditional_value, speaker_id
         )
         phone = torch.where(drop_ids[:, None], self.unconditional_value, phone)
-        return speaker_id, phone
+        phone_kind = torch.where(
+            drop_ids[:, None], self.unconditional_value, phone_kind
+        )
+        return speaker_id, phone, phone_kind
 
-    def forward(self, speaker_id, phone, train, force_drop_ids=None):
+    def forward(self, speaker_id, phone, phone_kind, train, force_drop_ids=None):
         use_dropout = self.dropout_prob > 0
         if (train and use_dropout) or (force_drop_ids is not None):
-            speaker_id, phone = self.token_drop(speaker_id, phone, force_drop_ids)
+            speaker_id, phone, phone_kind = self.token_drop(
+                speaker_id, phone, phone_kind, force_drop_ids
+            )
         speaker_id_embeddings = self.speaker_id_table(speaker_id)
         phone_embeddings = self.phone_table(phone)
-        return speaker_id_embeddings, phone_embeddings
+        phone_kind_embeddings = self.phone_kind_table(phone_kind)
+        return speaker_id_embeddings, phone_embeddings, phone_kind_embeddings
 
 
 #################################################################################
@@ -351,21 +358,27 @@ class DiT(nn.Module):
         nn.init.constant_(self.final_layer.linear.weight, 0)
         nn.init.constant_(self.final_layer.linear.bias, 0)
 
-    def forward(self, x, t, phone, speaker_id, attn_mask=None):
+    def forward(self, x, t, speaker_id, phone, phone_kind, attn_mask=None):
         """
         Forward pass of DiT.
         x: (N, C, L) tensor of spatial inputs
         t: (N,) tensor of diffusion timesteps
-        phone: (N, L) tensor of phone labels
         speaker_id: (N,) tensor of speaker IDs
+        phone: (N, L) tensor of phone labels
+        phone_kind: (N, L) tensor of phone kinds
         """
         # (N, D), (N, L, D)
-        speaker_id_embedding, phone_embedding = self.y_embedder(
-            speaker_id, phone, self.training
+        speaker_id_embedding, phone_embedding, phone_kind_embedding = self.y_embedder(
+            speaker_id, phone, phone_kind, self.training
         )
         t = self.t_embedder(t)  # (N, D)
         c = t  # (N, D)
-        c = c[:, None, :] + phone_embedding + speaker_id_embedding  # (N, L, D)
+        c = (
+            c[:, None, :]
+            + speaker_id_embedding
+            + phone_embedding
+            + phone_kind_embedding
+        )  # (N, L, D)
 
         x = x.transpose(-1, -2)  # Swap last two dimensions
         x = self.x_embedder(x) + self.pos_embed[:, : x.shape[1], :]  # (N, L, D)
@@ -375,14 +388,18 @@ class DiT(nn.Module):
         x = x.transpose(-1, -2)  # Swap last two dimensions
         return x
 
-    def forward_with_cfg(self, x, t, phone, speaker_id, cfg_scale, attn_mask=None):
+    def forward_with_cfg(
+        self, x, t, speaker_id, phone, phone_kind, cfg_scale, attn_mask=None
+    ):
         """
         Forward pass of DiT, but also batches the unconditional forward pass for classifier-free guidance.
         """
         # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
         half = x[: len(x) // 2]
         combined = torch.cat([half, half], dim=0)
-        model_out = self.forward(combined, t, phone, speaker_id, attn_mask=attn_mask)
+        model_out = self.forward(
+            combined, t, speaker_id, phone, phone_kind, attn_mask=attn_mask
+        )
         # For exact reproducibility reasons, we apply classifier-free guidance on only
         # three channels by default. The standard approach to cfg applies it to all channels.
         # This can be done by uncommenting the following line and commenting-out the line following that.

@@ -38,37 +38,65 @@ data_dir = os.path.dirname(duration_config["data"]["data_path"])
 with open(os.path.join(data_dir, "maps.json"), "r") as f:
     maps = json.load(f)
 phone_to_idx = maps["phone_to_idx"]
+phone_kind_to_idx = maps["phone_kind_to_idx"]
 
 
 # Step 1: Text to phonemes
 def text_to_phonemes(text, insert_empty=True):
     g2p = G2p()
     phonemes = g2p(text)
-    output = []
+    words = []
+    word = []
     for p in phonemes:
-        if p in phone_to_idx:
-            pass
-        elif p in [" ", ",", ".", "!", "?", ";", ":"]:
-            p = "EMPTY"
+        if p == " ":
+            if len(word) > 0:
+                words.append(word)
+            word = []
         else:
-            continue
-        # remove repeated phonemes
-        if len(output) > 0 and output[-1] == p:
-            continue
-        output.append(p)
+            word.append(p)
+    if len(word) > 0:
+        words.append(word)
+
+    phones = []
+    phone_kinds = []
+    for word in words:
+        for i, p in enumerate(word):
+            if p in [",", ".", "!", "?", ";", ":"]:
+                p = "EMPTY"
+            elif p in phone_to_idx:
+                pass
+            else:
+                continue
+
+            if p == "EMPTY":
+                phone_kind = "EMPTY"
+            elif len(word) == 1:
+                phone_kind = "WORD"
+            elif i == 0:
+                phone_kind = "START"
+            elif i == len(word) - 1:
+                phone_kind = "END"
+            else:
+                phone_kind = "MIDDLE"
+
+            phones.append(p)
+            phone_kinds.append(phone_kind)
 
     if insert_empty:
-        if output[0] != "EMPTY":
-            output.insert(0, "EMPTY")
-        if output[-1] != "EMPTY":
-            output.append("EMPTY")
-    return output
+        if phones[0] != "EMPTY":
+            phones.insert(0, "EMPTY")
+            phone_kinds.insert(0, "EMPTY")
+        if phones[-1] != "EMPTY":
+            phones.append("EMPTY")
+            phone_kinds.append("EMPTY")
+
+    return phones, phone_kinds
 
 
-phonemes = text_to_phonemes(args.text)
+phonemes, phone_kinds = text_to_phonemes(args.text)
 # Convert phonemes to indices
 phoneme_indices = [phone_to_idx[p] for p in phonemes]
-
+phone_kind_indices = [phone_kind_to_idx[p] for p in phone_kinds]
 print("Phonemes:", phonemes)
 
 # Step 2: Duration prediction
@@ -77,6 +105,7 @@ print("Phonemes:", phonemes)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch_phoneme_indices = torch.tensor(phoneme_indices)[None, :].long().to(device)
 torch_speaker_id = torch.full_like(torch_phoneme_indices, args.speaker_id)
+torch_phone_kind_indices = torch.tensor(phone_kind_indices)[None, :].long().to(device)
 
 samples = sample(
     args.duration_model_config,
@@ -86,6 +115,7 @@ samples = sample(
     seed=0,
     speaker_id=torch_speaker_id,
     phone=torch_phoneme_indices,
+    phone_kind=torch_phone_kind_indices,
 )
 phoneme_durations = samples[-1][0, 0]
 # plot phoneme durations and save to file
@@ -121,15 +151,22 @@ end_time = torch.cumsum(raw_durations, dim=0)
 end_frame = end_time / time_per_frame
 int_end_frame = end_frame.floor().int()
 repeated_phoneme_indices = []
+repeated_phone_kind_indices = []
 for i in range(len(phonemes)):
     repeated_phoneme_indices.extend(
         [phoneme_indices[i]] * (int_end_frame[i] - len(repeated_phoneme_indices))
+    )
+    repeated_phone_kind_indices.extend(
+        [phone_kind_indices[i]] * (int_end_frame[i] - len(repeated_phone_kind_indices))
     )
 
 torch_phoneme_indices = (
     torch.tensor(repeated_phoneme_indices)[None, :].long().to(device)
 )
 torch_speaker_id = torch.full_like(torch_phoneme_indices, args.speaker_id)
+torch_phone_kind_indices = (
+    torch.tensor(repeated_phone_kind_indices)[None, :].long().to(device)
+)
 
 samples = sample(
     args.acoustic_model_config,
@@ -139,6 +176,7 @@ samples = sample(
     seed=0,
     speaker_id=torch_speaker_id,
     phone=torch_phoneme_indices,
+    phone_kind=torch_phone_kind_indices,
 )
 mel = samples[-1][0]
 # compute raw mel if acoustic model normalize is true
@@ -153,7 +191,7 @@ else:
 
 # plot melspectrogram
 plt.figure(figsize=(12, 4))
-plt.imshow(raw_mel.cpu().numpy(), aspect="auto", origin="lower")
+plt.imshow(raw_mel.cpu().numpy(), aspect="auto", origin="lower", vmin=-5, vmax=5)
 plt.colorbar()
 plt.title("Mel Spectrogram")
 plt.xlabel("Time")

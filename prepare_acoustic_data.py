@@ -1,12 +1,10 @@
 import argparse
 import json
-import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import List, Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 import textgrid
 import torch
@@ -45,13 +43,14 @@ class Interval:
     start_frame: int  # Start position in spectrogram frames
     end_frame: int  # End position in spectrogram frames
     phone: str  # Phone label for this interval
+    phone_kind: str  # Phone kind for this interval
 
 
 @dataclass
 class TextGridData:
     intervals: List[Interval]
 
-    def padded_phones(self, L: int) -> List[str]:
+    def padded_phones(self, L: int) -> Tuple[List[str], List[str]]:
         """Return a list of phones repeated for each frame and padded/truncated to length L.
 
         Each phone is repeated for the number of frames it spans in the interval.
@@ -62,26 +61,31 @@ class TextGridData:
             L: Target length for the output sequence
 
         Returns:
-            List of phone labels of length L, with each phone repeated for its frame duration
+            Tuple containing:
+            - List of phone labels of length L, with each phone repeated for its frame duration
+            - List of phone kinds of length L
         """
         phones = []
+        phone_kinds = []
         for interval in self.intervals:
             # Repeat phone for each frame in the interval
             cur_frame = len(phones)
             phones.extend([interval.phone] * (interval.end_frame - cur_frame))
-
+            phone_kinds.extend([interval.phone_kind] * (interval.end_frame - cur_frame))
         # Pad with empty tokens if needed
         if len(phones) < L:
             phones.extend(["PAD"] * (L - len(phones)))
+            phone_kinds.extend(["EMPTY"] * (L - len(phone_kinds)))
         elif len(phones) > L:
             phones = phones[:L]
+            phone_kinds = phone_kinds[:L]
 
-        return phones
+        return phones, phone_kinds
 
 
 def read_textgrid(
     tg_path: Path, sample_rate: int, hop_length: int, pad_length: int
-) -> List[str]:
+) -> Tuple[List[str], List[str]]:
     """Read a TextGrid file and convert it to a sequence of frame-aligned phone labels.
 
     Args:
@@ -91,7 +95,9 @@ def read_textgrid(
         pad_length: Target length for output sequence (will pad/truncate to this length)
 
     Returns:
-        List of phone labels of length pad_length, with each phone repeated for its frame duration
+        Tuple containing:
+        - List of phone labels of length pad_length
+        - List of phone kinds of length pad_length
 
     Raises:
         ValueError: If there is a discontinuity between intervals in the frame sequence
@@ -99,12 +105,13 @@ def read_textgrid(
     # Read TextGrid file
     tg = textgrid.TextGrid.fromFile(tg_path)
 
-    # Get the phones tier (index 1)
+    words_tier = tg[0]
     phones_tier = tg[1]
 
     # Convert intervals to our dataclass
     intervals = []
     prev_end_frame = None
+    current_word_idx = 0
     for interval in phones_tier.intervals:
         phone = "EMPTY" if interval.mark == "" else interval.mark.upper()
         start_sample = int(interval.minTime * sample_rate)
@@ -118,6 +125,23 @@ def read_textgrid(
                 f"Frame discontinuity detected: previous end_frame {prev_end_frame} != current start_frame {start_frame}"
             )
 
+        if phone == "EMPTY":
+            phone_kind = "EMPTY"
+            current_word_idx += 1
+        elif (
+            interval.minTime == words_tier.intervals[current_word_idx].minTime
+            and interval.maxTime == words_tier.intervals[current_word_idx].maxTime
+        ):
+            phone_kind = "WORD"
+            current_word_idx += 1
+        elif interval.minTime == words_tier.intervals[current_word_idx].minTime:
+            phone_kind = "START"
+        elif interval.maxTime == words_tier.intervals[current_word_idx].maxTime:
+            phone_kind = "END"
+            current_word_idx += 1
+        else:
+            phone_kind = "MIDDLE"
+
         intervals.append(
             Interval(
                 start_sample=start_sample,
@@ -125,51 +149,11 @@ def read_textgrid(
                 start_frame=start_frame,
                 end_frame=end_frame,
                 phone=phone,
+                phone_kind=phone_kind,
             )
         )
         prev_end_frame = end_frame
-
     return TextGridData(intervals=intervals).padded_phones(pad_length)
-
-
-def create_mel_spectrogram(audio_path, ft, sample_rate, hop_length, input_length):
-    """Create mel spectrogram features from audio file.
-
-    Args:
-        audio_path: Path to audio file
-        ft: MelSpectrogramFeatures instance
-        sample_rate: Target sample rate
-        hop_length: Hop length for feature extraction
-        n_fft: FFT size
-        n_mels: Number of mel bands
-        input_length: Target length in frames
-
-    Returns:
-        mel: Mel spectrogram tensor
-    """
-    # Load the audio file
-    audio, sr = torchaudio.load(audio_path)
-
-    # Resample if needed
-    if sr != sample_rate:
-        audio = torchaudio.transforms.Resample(sr, sample_rate)(audio)
-
-    audio = audio.squeeze(0)  # Remove channel dimension
-
-    # Calculate target length in samples
-    target_length = input_length * hop_length - hop_length
-
-    # Pad with zeros if audio is shorter than target length
-    if audio.size(0) < target_length:
-        padding = target_length - audio.size(0)
-        audio = torch.nn.functional.pad(audio, (0, padding))
-    # Truncate if longer
-    else:
-        audio = audio[:target_length]
-
-    # Extract mel spectrogram
-    mel = ft(audio)
-    return mel
 
 
 def get_speaker_id(wav_path: Path) -> str:
@@ -251,7 +235,7 @@ def load_data(
             mel = mel_feature_extractor(audio)
             total_mel_length += mel.shape[-1]
             # Get phones
-            phones = read_textgrid(
+            phones, phone_kinds = read_textgrid(
                 textgrid_file,
                 sample_rate=sample_rate,
                 hop_length=hop_length,
@@ -266,6 +250,7 @@ def load_data(
                     "speaker_id": speaker_id,
                     "mel": mel.half().cpu().numpy(),
                     "phones": phones,
+                    "phone_kinds": phone_kinds,
                 },
             )
         except Exception as e:
@@ -302,19 +287,18 @@ with open(maps_path, "r") as f:
     maps = json.load(f)
     speaker_id_to_idx = maps["speaker_id_to_idx"]
     phone_to_idx = maps["phone_to_idx"]
+    phone_kind_to_idx = maps["phone_kind_to_idx"]
 
-# First pass - compute total length
-# pad = phone_to_idx['PAD']
 # Create memory mapped file
 D = N_MELS
 mmap_file = np.memmap(
     Path(FLAGS.output_dir) / "acoustic.npy",
     dtype=np.float16,
     mode="w+",
-    shape=(total_mel_length, D + 2),
+    shape=(total_mel_length, D + 3),
 )
 
-# Second pass - write data
+# Write data
 current_idx = 0
 mel_dir = Path(FLAGS.output_dir) / "mel"
 npy_files = sorted(mel_dir.glob("*.npy"))
@@ -322,12 +306,16 @@ rng = np.random.Generator(np.random.PCG64(42))
 rng.shuffle(npy_files)
 
 for npy_file in npy_files:
-    record = np.load(npy_file, allow_pickle=True).item()
-    phones = np.array([phone_to_idx[phone] for phone in record["phones"]])
+    record = np.load(npy_file, allow_pickle=True, mmap_mode=None).item()
+    phones = [phone_to_idx[phone] for phone in record["phones"]]
     length = len(phones)
-    phones = phones[:length].astype(np.float16)
-    mel = record["mel"][0, :, :length].T.astype(np.float16)
+    phones = phones[:length]
     speaker_id = speaker_id_to_idx[record["speaker_id"]]
+    phone_kinds = [
+        phone_kind_to_idx[phone_kind] for phone_kind in record["phone_kinds"]
+    ]
+    phone_kinds = phone_kinds[:length]
+    mel = record["mel"][0, :, :length].T
 
     # Write to memmap
     start_index = current_idx
@@ -335,9 +323,11 @@ for npy_file in npy_files:
     mmap_file[start_index:end_index, :D] = mel
     mmap_file[start_index:end_index, D] = phones
     mmap_file[start_index:end_index, D + 1] = speaker_id
+    mmap_file[start_index:end_index, D + 2] = phone_kinds
     current_idx = end_index
 
 mmap_file.flush()
+del mmap_file
 
 # remove mel directory and all files in it
 shutil.rmtree(mel_dir)
