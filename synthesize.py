@@ -20,7 +20,7 @@ parser.add_argument("--duration-model-checkpoint", type=str, required=True)
 parser.add_argument("--acoustic-model-config", type=str, required=True)
 parser.add_argument("--acoustic-model-checkpoint", type=str, required=True)
 parser.add_argument("--output-file", type=str, required=True)
-parser.add_argument("--speaker-id", type=int, required=True)
+parser.add_argument("--speaker-id", type=str, required=True)
 
 
 args = parser.parse_args()
@@ -39,6 +39,7 @@ with open(os.path.join(data_dir, "maps.json"), "r") as f:
     maps = json.load(f)
 phone_to_idx = maps["phone_to_idx"]
 phone_kind_to_idx = maps["phone_kind_to_idx"]
+speaker_id_to_idx = maps["speaker_id_to_idx"]
 
 
 # Step 1: Text to phonemes
@@ -104,13 +105,15 @@ print("Phonemes:", phonemes)
 # conver phoneme_indices to torch tensor
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch_phoneme_indices = torch.tensor(phoneme_indices)[None, :].long().to(device)
-torch_speaker_id = torch.full_like(torch_phoneme_indices, args.speaker_id)
+torch_speaker_id = torch.full_like(
+    torch_phoneme_indices, speaker_id_to_idx[args.speaker_id]
+)
 torch_phone_kind_indices = torch.tensor(phone_kind_indices)[None, :].long().to(device)
 
 samples = sample(
     args.duration_model_config,
     args.duration_model_checkpoint,
-    cfg_scale=2.0,
+    cfg_scale=4.0,
     num_sampling_steps=1000,
     seed=0,
     speaker_id=torch_speaker_id,
@@ -163,7 +166,9 @@ for i in range(len(phonemes)):
 torch_phoneme_indices = (
     torch.tensor(repeated_phoneme_indices)[None, :].long().to(device)
 )
-torch_speaker_id = torch.full_like(torch_phoneme_indices, args.speaker_id)
+torch_speaker_id = torch.full_like(
+    torch_phoneme_indices, speaker_id_to_idx[args.speaker_id]
+)
 torch_phone_kind_indices = (
     torch.tensor(repeated_phone_kind_indices)[None, :].long().to(device)
 )
@@ -171,7 +176,7 @@ torch_phone_kind_indices = (
 samples = sample(
     args.acoustic_model_config,
     args.acoustic_model_checkpoint,
-    cfg_scale=2.0,
+    cfg_scale=4.0,
     num_sampling_steps=1000,
     seed=0,
     speaker_id=torch_speaker_id,

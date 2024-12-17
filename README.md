@@ -1,6 +1,6 @@
 # Diffusion Speech
 
-A text to speech model using diffusion models.
+Diffusion text to speech model.
 
 To get started, you need to install the dependencies and download the dataset. We use uv for managing Python dependencies.
 
@@ -80,19 +80,24 @@ uv run sample.py \
 --num-sampling-steps 1000
 ```
 
-Synthesize a given text using the trained Dit models.
+Synthesize speech using pretrained models.
 
 ```
-# run once to download nltk data
+# download pretrained models
+git clone https://huggingface.co/ntt123/diffusion-speech-360h /tmp/data
+
+# download nltk data
 uv run python -c "import nltk; nltk.download('cmudict')"
 uv run python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng')"
 
 uv run synthesize.py \
 --duration-model-config ./configs/train_duration_dit_s.yaml \
 --acoustic-model-config ./configs/train_acoustic_dit_b.yaml \
---duration-model-checkpoint results/duration/000-DiT-S/checkpoints/0120000.pt \
---acoustic-model-checkpoint results/acoustic/000-DiT-B/checkpoints/0120000.pt \
---speaker-id 134 \
+--duration-model-checkpoint /tmp/data/duration_model_0120000.pt \
+--acoustic-model-checkpoint /tmp/data/acoustic_model_0140000.pt \
+--speaker-id 1914 \
 --output-file ./audio.wav \
---text "Diffusion Speech Generation Model"
+--text "Ilya has made several major contributions to the field of deep learning!"
 ```
+
+See an example of the generated audio at [audio.wav](audio.wav).

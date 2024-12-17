@@ -39,10 +39,10 @@ from models import DiT_models
 
 def get_flops_achieved(f):
     flop_counter = FlopCounterMode(display=False)
+    ms_per_iter = do_bench(f)
     with flop_counter:
         f()
     total_flops = flop_counter.get_total_flops()
-    ms_per_iter = do_bench(f)
     iters_per_second = 1e3 / ms_per_iter
     return f"{iters_per_second * total_flops / 1e12: .2f} TF/s"
 
