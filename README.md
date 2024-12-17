@@ -1,22 +1,25 @@
 # Diffusion Speech
 
-Diffusion text to speech model.
+Diffusion Speech is a diffusion-based text-to-speech model. Our speech synthesis pipeline is quite simple. We use a diffusion transformer model (DiT) to predict the duration of each phoneme. Then we use another DiT model to predict the mel-spectrogram features at each frame. Finally, we use the pretrained [Vocos vocoder](https://github.com/gemelo-ai/vocos) to convert the mel-spectrogram to audio waveform.
 
-To get started, you need to install the dependencies and download the dataset. We use uv for managing Python dependencies.
 
-```
-pip install uv
-uv venv -p python3.11
-uv pip install -r pyproject.toml
-```
-
-We use LibriTTS-R dataset.
+To get started, first install the required system dependencies and Python package manager uv:
 
 ```
 apt update
 apt install ffmpeg git-lfs zip unzip -y
 git lfs install
 
+pip install uv
+uv venv -p python3.11
+uv pip install -r pyproject.toml
+```
+
+## Dataset
+
+We use the LibriTTS-R dataset with phoneme alignment ground truth provided by [cdminix](https://huggingface.co/datasets/cdminix/libritts-r-aligned) for training duration and acoustic models.
+
+```
 (
     mkdir -p /tmp/data
     cd /tmp/data
@@ -27,8 +30,8 @@ git lfs install
 )
 ```
 
-
-Prepare the training data for duration model.
+## Duration model
+Prepare the training data for duration model:
 
 ```
 uv run prepare_duration_data.py \
@@ -38,13 +41,13 @@ uv run prepare_duration_data.py \
 ```
 
 
-Start training the duration model.
+Start training the duration model:
 
 ```
 uv run train.py --config configs/train_duration_dit_s.yaml
 ```
 
-Sample from the duration model.
+Sample from the duration model:
 
 ```
 uv run sample.py \
@@ -54,7 +57,9 @@ uv run sample.py \
 --num-sampling-steps 1000
 ```
 
-Prepare the training data for acoustic model.
+## Acoustic model
+
+Prepare the training data for acoustic model:
 
 ```
 uv run prepare_acoustic_data.py \
@@ -64,13 +69,13 @@ uv run prepare_acoustic_data.py \
 ```
 
 
-Start training the acoustic model.
+Start training the acoustic model:
 
 ```
 uv run train.py --config configs/train_acoustic_dit_b.yaml
 ```
 
-Sample from the acoustic model.
+Sample from the acoustic model:
 
 ```
 uv run sample.py \
@@ -80,7 +85,9 @@ uv run sample.py \
 --num-sampling-steps 1000
 ```
 
-Synthesize speech using pretrained models.
+## Pretrained models
+
+To synthesize speech using pretrained models:
 
 ```
 # download pretrained models
@@ -101,3 +108,7 @@ uv run synthesize.py \
 ```
 
 See an example of the generated audio at [audio.wav](audio.wav).
+
+# Call for Compute Donations
+
+The current model is trained on only 360 hours of speech data. I would love to train even bigger and better open-source TTS models on much more data (10x, 100x, or even 1000x more!), but I'm currently limited by compute resources. If you're interested in supporting this project by donating compute resources, I'd be very grateful! You can reach me at `xcodevn@gmail.com`.
