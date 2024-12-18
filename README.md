@@ -104,7 +104,7 @@ uv run synthesize.py \
 --acoustic-model-checkpoint /tmp/data/acoustic_model_0140000.pt \
 --speaker-id 1914 \
 --output-file ./audio.wav \
---text "Ilya has made several major contributions to the field of deep learning!"
+--text "Ilya has made several major contributions to the field of deep learning."
 ```
 
 See an example of the generated audio at [audio.wav](audio.wav).
