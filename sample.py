@@ -18,7 +18,7 @@ import torch
 import yaml
 from tqdm import tqdm
 
-from diffusion import create_diffusion
+from cfm import create_cfm
 from models import DiT_models
 
 
@@ -110,7 +110,7 @@ def plot_samples(samples, x):
         ax.text(
             0.02,
             0.98,
-            f"{frame+1} / 1000",
+            f"{frame+1} / {len(samples)}",
             transform=ax.transAxes,
             verticalalignment="top",
             color="black",
@@ -149,11 +149,11 @@ def sample(
     config_path,
     ckpt_path,
     cfg_scale=4.0,
-    num_sampling_steps=1000,
     seed=0,
     speaker_id=None,
     phone=None,
     phone_kind=None,
+    num_time_steps=1000,
 ):
     torch.manual_seed(seed)
     torch.set_grad_enabled(False)
@@ -169,47 +169,39 @@ def sample(
     model = DiT_models[model_config["name"]](
         input_size=model_config["input_size"],
         embedding_vocab_size=model_config["embedding_vocab_size"],
-        learn_sigma=model_config["learn_sigma"],
         in_channels=data_config["data_dim"],
     ).to(device)
 
     state_dict = find_model(ckpt_path)
     model.load_state_dict(state_dict)
     model.eval()  # important!
-    diffusion = create_diffusion(str(num_sampling_steps))
+    cfm = create_cfm()
     n = 1
     z = torch.randn(n, data_config["data_dim"], speaker_id.shape[1], device=device)
 
     attn_mask = speaker_id[:, None, :] == speaker_id[:, :, None]
     attn_mask = attn_mask.unsqueeze(1)
-    attn_mask = torch.cat([attn_mask, attn_mask], 0)
-    # Setup classifier-free guidance:
-    z = torch.cat([z, z], 0)
-    unconditional_value = model.y_embedder.unconditional_value
-    phone_null = torch.full_like(phone, unconditional_value)
-    speaker_id_null = torch.full_like(speaker_id, unconditional_value)
-    phone = torch.cat([phone, phone_null], 0)
-    speaker_id = torch.cat([speaker_id, speaker_id_null], 0)
-    phone_kind_null = torch.full_like(phone_kind, unconditional_value)
-    phone_kind = torch.cat([phone_kind, phone_kind_null], 0)
     model_kwargs = dict(
         phone=phone,
         speaker_id=speaker_id,
         phone_kind=phone_kind,
-        cfg_scale=cfg_scale,
+        # cfg_scale=cfg_scale,
         attn_mask=attn_mask,
     )
 
-    samples = diffusion.p_sample_loop(
-        model.forward_with_cfg,
+    time_grid = torch.linspace(0, 1, num_time_steps)
+
+    samples = cfm.solve_ode(
+        model.forward,
         z.shape,
         z,
-        clip_denoised=False,
         model_kwargs=model_kwargs,
         progress=True,
         device=device,
+        time_grid=time_grid,
+        return_intermediates=True,
     )
-    samples = [s.chunk(2, dim=0)[0] for s in samples]  # Remove null class samples
+    samples = samples.unbind(0)
     return samples
 
 
@@ -218,18 +210,18 @@ if __name__ == "__main__":
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument("--ckpt", type=str, required=True)
     parser.add_argument("--cfg-scale", type=float, default=4.0)
-    parser.add_argument("--num-sampling-steps", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--num-time-steps", type=int, default=1000)
     args = parser.parse_args()
     x, speaker_id, phone, phone_kind = get_data(args.config, args.seed)
     samples = sample(
         args.config,
         args.ckpt,
         args.cfg_scale,
-        args.num_sampling_steps,
         args.seed,
         speaker_id,
         phone,
         phone_kind,
+        args.num_time_steps,
     )
     plot_samples(samples, x)

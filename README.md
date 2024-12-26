@@ -50,11 +50,7 @@ uv run train.py --config configs/train_duration_dit_s.yaml
 Sample from the duration model:
 
 ```
-uv run sample.py \
---config configs/train_duration_dit_s.yaml \
---ckpt results/duration/000-DiT-S/checkpoints/0100000.pt \
---cfg-scale 4 \
---num-sampling-steps 1000
+uv run sample.py --config configs/train_duration_dit_s.yaml --ckpt results/duration/019-DiT-S/checkpoints/0040000.pt --cfg-scale 1 --num-time-steps 100
 ```
 
 ## Acoustic model
@@ -80,9 +76,9 @@ Sample from the acoustic model:
 ```
 uv run sample.py \
 --config configs/train_acoustic_dit_b.yaml \
---ckpt results/acoustic/000-DiT-B/checkpoints/0100000.pt \
+--ckpt results/acoustic/002-DiT-B/checkpoints/0070000.pt \
 --cfg-scale 4 \
---num-sampling-steps 1000
+--num-time-steps 1000
 ```
 
 ## Pretrained models
@@ -100,9 +96,9 @@ uv run python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng')"
 uv run synthesize.py \
 --duration-model-config ./configs/train_duration_dit_s.yaml \
 --acoustic-model-config ./configs/train_acoustic_dit_b.yaml \
---duration-model-checkpoint /tmp/data/duration_model_0120000.pt \
---acoustic-model-checkpoint /tmp/data/acoustic_model_0140000.pt \
---speaker-id 1914 \
+--duration-model-checkpoint results/duration/021-DiT-S/checkpoints/0710000.pt \
+--acoustic-model-checkpoint results/acoustic/003-DiT-B/checkpoints/0160000.pt \
+--speaker-id 0 \
 --output-file ./audio.wav \
 --text "Ilya has made several major contributions to the field of deep learning."
 ```

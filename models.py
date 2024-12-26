@@ -197,10 +197,10 @@ class LabelEmbedder(nn.Module):
         speaker_id = torch.where(
             drop_ids[:, None], self.unconditional_value, speaker_id
         )
-        phone = torch.where(drop_ids[:, None], self.unconditional_value, phone)
-        phone_kind = torch.where(
-            drop_ids[:, None], self.unconditional_value, phone_kind
-        )
+        # phone = torch.where(drop_ids[:, None], self.unconditional_value, phone)
+        # phone_kind = torch.where(
+        #     drop_ids[:, None], self.unconditional_value, phone_kind
+        # )
         return speaker_id, phone, phone_kind
 
     def forward(self, speaker_id, phone, phone_kind, train, force_drop_ids=None):
@@ -291,15 +291,13 @@ class DiT(nn.Module):
         num_heads=16,
         mlp_ratio=4.0,
         class_dropout_prob=0.1,
-        learn_sigma=True,
         embedding_vocab_size=1024,
     ):
         super().__init__()
         self.input_size = input_size
-        self.learn_sigma = learn_sigma
         self.in_channels = in_channels
         self.hidden_size = hidden_size
-        self.out_channels = in_channels * 2 if learn_sigma else in_channels
+        self.out_channels = in_channels
         self.num_heads = num_heads
 
         self.x_embedder = nn.Linear(in_channels, hidden_size, bias=True)
@@ -358,7 +356,7 @@ class DiT(nn.Module):
         nn.init.constant_(self.final_layer.linear.weight, 0)
         nn.init.constant_(self.final_layer.linear.bias, 0)
 
-    def forward(self, x, t, speaker_id, phone, phone_kind, attn_mask=None):
+    def forward(self, x_t, t, speaker_id, phone, phone_kind, attn_mask=None):
         """
         Forward pass of DiT.
         x: (N, C, L) tensor of spatial inputs
@@ -380,7 +378,7 @@ class DiT(nn.Module):
             + phone_kind_embedding
         )  # (N, L, D)
 
-        x = x.transpose(-1, -2)  # Swap last two dimensions
+        x = x_t.transpose(-1, -2)  # Swap last two dimensions
         x = self.x_embedder(x) + self.pos_embed[:, : x.shape[1], :]  # (N, L, D)
         for block in self.blocks:
             x = block(x, c, attn_mask=attn_mask)  # (N, L, D)
@@ -389,26 +387,32 @@ class DiT(nn.Module):
         return x
 
     def forward_with_cfg(
-        self, x, t, speaker_id, phone, phone_kind, cfg_scale, attn_mask=None
+        self, x_t, t, speaker_id, phone, phone_kind, cfg_scale, attn_mask=None
     ):
         """
         Forward pass of DiT, but also batches the unconditional forward pass for classifier-free guidance.
         """
         # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
-        half = x[: len(x) // 2]
-        combined = torch.cat([half, half], dim=0)
-        model_out = self.forward(
+        combined = torch.cat([x_t, x_t], dim=0)
+        t = torch.cat([t, t], dim=0)
+        speaker_id_null = torch.full_like(
+            speaker_id, self.y_embedder.unconditional_value
+        )
+        speaker_id = torch.cat([speaker_id, speaker_id_null], dim=0)
+        # phone_null = torch.full_like(phone, self.y_embedder.unconditional_value)
+        phone = torch.cat([phone, phone], dim=0)
+        # phone_kind_null = torch.full_like(
+        #     phone_kind, self.y_embedder.unconditional_value
+        # )
+        phone_kind = torch.cat([phone_kind, phone_kind], dim=0)
+        if attn_mask is not None:
+            attn_mask = torch.cat([attn_mask, attn_mask], dim=0)
+        eps = self.forward(
             combined, t, speaker_id, phone, phone_kind, attn_mask=attn_mask
         )
-        # For exact reproducibility reasons, we apply classifier-free guidance on only
-        # three channels by default. The standard approach to cfg applies it to all channels.
-        # This can be done by uncommenting the following line and commenting-out the line following that.
-        eps, rest = model_out[:, : self.in_channels], model_out[:, self.in_channels :]
-        # eps, rest = model_out[:, :3], model_out[:, 3:]
         cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
         half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
-        eps = torch.cat([half_eps, half_eps], dim=0)
-        return torch.cat([eps, rest], dim=1)
+        return half_eps
 
 
 #################################################################################
@@ -472,7 +476,7 @@ def DiT_B(**kwargs):
 
 
 def DiT_S(**kwargs):
-    return DiT(depth=6, hidden_size=256, num_heads=4, **kwargs)
+    return DiT(depth=4, hidden_size=64, num_heads=1, **kwargs)
 
 
 DiT_models = {"DiT-XL": DiT_XL, "DiT-L": DiT_L, "DiT-B": DiT_B, "DiT-S": DiT_S}

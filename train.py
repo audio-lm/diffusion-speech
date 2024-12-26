@@ -33,7 +33,7 @@ from torch.utils.flop_counter import FlopCounterMode
 from triton.testing import do_bench
 
 import wandb
-from diffusion import create_diffusion
+from cfm import create_cfm
 from models import DiT_models
 
 
@@ -235,7 +235,6 @@ def get_batch(step, batch_size, seq_len):
 model = DiT_models[model_config["name"]](
     input_size=model_config["input_size"],
     embedding_vocab_size=model_config["embedding_vocab_size"],
-    learn_sigma=model_config["learn_sigma"],
     in_channels=data_config["data_dim"],
 ).float()
 
@@ -259,10 +258,7 @@ logger.info(f"Use torch.compile: {use_compile}")
 
 
 update_ema(ema, simple_model, decay=0)
-
-# Setup diffusion
-learn_sigma = model_config["learn_sigma"]
-diffusion = create_diffusion(timestep_respacing="", learn_sigma=learn_sigma)
+cfm = create_cfm()
 logger.info(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
 # Configure optimizer
@@ -333,7 +329,7 @@ def compute_loss(model, x, speaker_id, phone, phone_kind, length):
     phone = phone[..., :length].to(DEVICE)
     speaker_id = speaker_id.to(DEVICE)
     phone_kind = phone_kind.to(DEVICE)
-    t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=x.device)
+    t = torch.rand(x.shape[0], device=x.device, dtype=torch.float32)
     if training_config.get("use_block_mask", False):
         B = speaker_id.shape[0]
         S = speaker_id.shape[1]
@@ -360,7 +356,7 @@ def compute_loss(model, x, speaker_id, phone, phone_kind, length):
     model_kwargs = dict(
         phone=phone, speaker_id=speaker_id, phone_kind=phone_kind, attn_mask=attn_mask
     )
-    loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
+    loss_dict = cfm.training_losses(model, x, t, model_kwargs)
     loss = loss_dict["loss"].float().mean()
     return loss
 

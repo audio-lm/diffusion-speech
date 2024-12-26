@@ -2,7 +2,6 @@ model:
   name: DiT-S
   input_size: 512
   embedding_vocab_size: 1024
-  learn_sigma: true
 optimization:
   constant_memory: false
   epochs: 1400
@@ -13,13 +12,11 @@ optimization:
   warmup_iters: 10000
   lr_decay_iters: 100000
   decay_lr: true
-  weight_decay: 0.0
+  weight_decay: 1.0e-1
   max_grad_norm: 20.0
   betas:
     beta1: 0.9
-    beta2: 0.999
-  loss:
-    num_timesteps: 1000
+    beta2: 0.95
 data:
   data_path: /tmp/data/duration.npy
   data_dim: 1
@@ -37,4 +34,4 @@ training:
   resume_from_ckpt: null
   wandb:
     enable: true
-    project: diffusion-speech
+    project: cfm-speech

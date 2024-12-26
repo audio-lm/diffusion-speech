@@ -21,7 +21,9 @@ parser.add_argument("--acoustic-model-config", type=str, required=True)
 parser.add_argument("--acoustic-model-checkpoint", type=str, required=True)
 parser.add_argument("--output-file", type=str, required=True)
 parser.add_argument("--speaker-id", type=str, required=True)
-
+parser.add_argument("--num-time-steps", type=int, default=1000)
+parser.add_argument("--cfg-scale", type=float, default=4.0)
+parser.add_argument("--seed", type=int, default=0)
 
 args = parser.parse_args()
 
@@ -113,9 +115,9 @@ torch_phone_kind_indices = torch.tensor(phone_kind_indices)[None, :].long().to(d
 samples = sample(
     args.duration_model_config,
     args.duration_model_checkpoint,
-    cfg_scale=4.0,
-    num_sampling_steps=1000,
-    seed=0,
+    cfg_scale=args.cfg_scale,
+    num_time_steps=args.num_time_steps,
+    seed=2 * args.seed,
     speaker_id=torch_speaker_id,
     phone=torch_phoneme_indices,
     phone_kind=torch_phone_kind_indices,
@@ -176,9 +178,9 @@ torch_phone_kind_indices = (
 samples = sample(
     args.acoustic_model_config,
     args.acoustic_model_checkpoint,
-    cfg_scale=4.0,
-    num_sampling_steps=1000,
-    seed=0,
+    cfg_scale=args.cfg_scale,
+    num_time_steps=args.num_time_steps,
+    seed=2 * args.seed + 1,
     speaker_id=torch_speaker_id,
     phone=torch_phoneme_indices,
     phone_kind=torch_phone_kind_indices,
