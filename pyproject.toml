@@ -17,3 +17,11 @@ dependencies = [
     "vocos>=0.1.0",
     "wandb>=0.19.0",
 ]
+
+[dependency-groups]
+dev = [
+    "awscli>=1.36.38",
+    "black>=24.10.0",
+    "huggingface>=0.0.1",
+    "isort>=5.13.2",
+]

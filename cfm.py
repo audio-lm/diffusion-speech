@@ -50,7 +50,7 @@ class CFM:
 
         # Approximate ODE solution with numerical ODE solver
         x_0 = torch.randn(shape, device=device)
-        torch.nn.init.trunc_normal_(x_0, mean=0.0, std=1.0, a=-2.0, b=2.0)
+        torch.nn.init.trunc_normal_(x_0, mean=0.0, std=1.0, a=-3.0, b=3.0)
         sol = odeint(
             ode_func,
             x_0,

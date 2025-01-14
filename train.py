@@ -185,7 +185,7 @@ for key, value in CONFIG.items():
 logger.info(f"Starting rank={RANK}, seed={seed}, world_size={WORLD_SIZE}.")
 
 
-def get_batch(step, batch_size, seq_len):
+def get_batch(step, batch_size, seq_len, split="train"):
     import numpy as np
 
     # Load dataset from memmap file
@@ -198,6 +198,11 @@ def get_batch(step, batch_size, seq_len):
         mode="r",
         shape=(arr.shape[0] // (data_dim + 3), data_dim + 3),
     )
+    N = arr.shape[0] * 9 // 10
+    if split == "train":
+        arr = arr[:N]
+    else:
+        arr = arr[N:]
 
     # Create random number generator
     seed = step * WORLD_SIZE + RANK
@@ -366,6 +371,35 @@ logger.info(f"Use bfloat16: {use_bfloat16}")
 
 logger.info(f"Use learning rate decay: {opt_config['decay_lr']}")
 
+
+def get_length_and_batch_size(step):
+    length = int(opt_config["initial_input_size"] * 2 ** (step / 10_000))
+    length = min(length, model_config["input_size"])
+    batch_size = opt_config["global_batch_size"] // WORLD_SIZE
+    if opt_config["constant_memory"]:
+        batch_size = batch_size // (length // opt_config["initial_input_size"])
+    return length, batch_size
+
+
+@torch.no_grad()
+def eval_model(train_steps):
+    model.eval()
+    losses = []
+    length, batch_size = get_length_and_batch_size(train_steps)
+    for i in range(training_config["ckpt_every"] // 10):
+        x, speaker_id, phone, phone_kind = get_batch(
+            i, batch_size, length, split="eval"
+        )
+        with torch.autocast(
+            device_type="cuda", dtype=torch.bfloat16, enabled=use_bfloat16
+        ):
+            loss = compute_loss(model, x, speaker_id, phone, phone_kind, length=length)
+        losses.append(loss)
+    model.train()
+    loss = sum(losses) / len(losses)
+    return loss.item()
+
+
 while True:
     # determine and set the learning rate for this iteration
     lr = get_lr(train_steps) if opt_config["decay_lr"] else opt_config["learning_rate"]
@@ -377,14 +411,9 @@ while True:
         logger.info(f"Setting seed to {seed} at step {train_steps}")
         torch.manual_seed(seed)
 
-    length = int(opt_config["initial_input_size"] * 2 ** (train_steps / 10_000))
-    length = min(length, model_config["input_size"])
-    batch_size = opt_config["global_batch_size"] // WORLD_SIZE
-    if opt_config["constant_memory"]:
-        batch_size = batch_size // (length // opt_config["initial_input_size"])
-
+    length, batch_size = get_length_and_batch_size(train_steps)
     x, speaker_id, phone, phone_kind = get_batch(
-        train_steps, batch_size, seq_len=length
+        train_steps, batch_size, length, split="train"
     )
 
     with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bfloat16):
@@ -404,6 +433,9 @@ while True:
     # Save DiT checkpoint:
     if train_steps % training_config["ckpt_every"] == 0 and train_steps > 0:
         if RANK == 0:
+            loss = eval_model(train_steps)
+            logger.info(f"Eval Loss: {loss:.4f}")
+            wandb.log({"eval_loss": loss}, step=train_steps, commit=False)
             checkpoint = {
                 "model": simple_model.state_dict(),
                 "ema": ema.state_dict(),
@@ -443,7 +475,8 @@ while True:
                     "grad_norm": grad_norm,
                     "length": length,
                     "lr": lr,
-                }
+                },
+                step=train_steps,
             )
 
         # Reset monitoring variables:

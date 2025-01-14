@@ -99,6 +99,19 @@ def get_data(config_path, seed=0):
     return x, speaker_id, phone, phone_kind
 
 
+def plot_trajectory(samples, x, index):
+    s = torch.cat(samples, dim=0)
+    plt.figure(figsize=(12, 8))
+    for i in range(0, s.shape[2], 50):
+        plt.plot(s[:, index, i].cpu().numpy(), label=f"Feature {i}")
+    plt.xlim(0, s.shape[0] - 1)
+    plt.xlabel("Time")
+    plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+    plt.tight_layout()
+    plt.savefig("trajectory.png", bbox_inches="tight")
+    plt.close()
+
+
 def plot_samples(samples, x):
     # Create figure and axis
     fig, ax = plt.subplots(figsize=(20, 4))
@@ -148,7 +161,6 @@ def plot_samples(samples, x):
 def sample(
     config_path,
     ckpt_path,
-    cfg_scale=4.0,
     seed=0,
     speaker_id=None,
     phone=None,
@@ -185,7 +197,6 @@ def sample(
         phone=phone,
         speaker_id=speaker_id,
         phone_kind=phone_kind,
-        # cfg_scale=cfg_scale,
         attn_mask=attn_mask,
     )
 
@@ -209,15 +220,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument("--ckpt", type=str, required=True)
-    parser.add_argument("--cfg-scale", type=float, default=4.0)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--num-time-steps", type=int, default=1000)
+    parser.add_argument("--plot-trajectory", action="store_true")
+    parser.add_argument("--plot-trajectory-index", type=int, default=0)
     args = parser.parse_args()
     x, speaker_id, phone, phone_kind = get_data(args.config, args.seed)
     samples = sample(
         args.config,
         args.ckpt,
-        args.cfg_scale,
         args.seed,
         speaker_id,
         phone,
@@ -225,3 +236,5 @@ if __name__ == "__main__":
         args.num_time_steps,
     )
     plot_samples(samples, x)
+    if args.plot_trajectory:
+        plot_trajectory(samples, x, args.plot_trajectory_index)

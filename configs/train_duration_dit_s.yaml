@@ -1,18 +1,18 @@
 model:
   name: DiT-S
   input_size: 512
-  embedding_vocab_size: 1024
+  embedding_vocab_size: 16384
 optimization:
   constant_memory: false
   epochs: 1400
   global_batch_size: 512
   initial_input_size: 32
-  learning_rate: 1.0e-4
+  learning_rate: 2.0e-3
   min_lr: 1.0e-5
   warmup_iters: 10000
-  lr_decay_iters: 100000
+  lr_decay_iters: 200000
   decay_lr: true
-  weight_decay: 1.0e-1
+  weight_decay: 0.0
   max_grad_norm: 20.0
   betas:
     beta1: 0.9

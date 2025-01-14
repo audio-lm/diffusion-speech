@@ -50,7 +50,12 @@ uv run train.py --config configs/train_duration_dit_s.yaml
 Sample from the duration model:
 
 ```
-uv run sample.py --config configs/train_duration_dit_s.yaml --ckpt results/duration/019-DiT-S/checkpoints/0040000.pt --cfg-scale 1 --num-time-steps 100
+uv run sample.py \
+--config configs/train_duration_dit_s.yaml \
+--ckpt results/duration/015-DiT-S/checkpoints/0120000.pt \
+--num-time-steps 100 \
+--plot-trajectory \
+--plot-trajectory-index 10
 ```
 
 ## Acoustic model

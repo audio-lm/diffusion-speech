@@ -178,8 +178,8 @@ class LabelEmbedder(nn.Module):
         if use_cfg_embedding:
             self.unconditional_value = num_classes - 1
         self.speaker_id_table = nn.Embedding(num_classes, hidden_size)
-        self.phone_table = nn.Embedding(num_classes, hidden_size)
-        self.phone_kind_table = nn.Embedding(num_classes, hidden_size)
+        self.phone_table = nn.Embedding(128, hidden_size)
+        self.phone_kind_table = nn.Embedding(8, hidden_size)
         self.num_classes = num_classes
         self.dropout_prob = dropout_prob
 
@@ -476,7 +476,7 @@ def DiT_B(**kwargs):
 
 
 def DiT_S(**kwargs):
-    return DiT(depth=4, hidden_size=64, num_heads=1, **kwargs)
+    return DiT(depth=4, hidden_size=512, num_heads=8, **kwargs)
 
 
 DiT_models = {"DiT-XL": DiT_XL, "DiT-L": DiT_L, "DiT-B": DiT_B, "DiT-S": DiT_S}
