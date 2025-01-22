@@ -190,7 +190,7 @@ def get_batch(step, batch_size, seq_len, split="train"):
 
     # Load dataset from memmap file
     data_dim = data_config["data_dim"]
-    data_path = data_config["data_path"]
+    data_path = data_config["data_path"][split]
     arr = np.memmap(data_path, dtype=np.float16, mode="r")
     arr = np.memmap(
         data_path,
@@ -198,11 +198,6 @@ def get_batch(step, batch_size, seq_len, split="train"):
         mode="r",
         shape=(arr.shape[0] // (data_dim + 3), data_dim + 3),
     )
-    N = arr.shape[0] * 9 // 10
-    if split == "train":
-        arr = arr[:N]
-    else:
-        arr = arr[N:]
 
     # Create random number generator
     seed = step * WORLD_SIZE + RANK
@@ -388,7 +383,7 @@ def eval_model(train_steps):
     length, batch_size = get_length_and_batch_size(train_steps)
     for i in range(training_config["ckpt_every"] // 10):
         x, speaker_id, phone, phone_kind = get_batch(
-            i, batch_size, length, split="eval"
+            i, batch_size, length, split="test"
         )
         with torch.autocast(
             device_type="cuda", dtype=torch.bfloat16, enabled=use_bfloat16

@@ -90,7 +90,7 @@ def get_data(config_path, seed=0):
         1,
         seq_len=model_config["input_size"],
         DEVICE=device,
-        data_file=data_config["data_path"],
+        data_file=data_config["data_path"]["test"],
         data_dim=data_config["data_dim"],
         data_mean=data_config["data_mean"],
         data_std=data_config["data_std"],

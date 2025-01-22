@@ -17,27 +17,17 @@ uv pip install -r pyproject.toml
 
 ## Dataset
 
-We use the LibriTTS-R dataset with phoneme alignment ground truth provided by [cdminix](https://huggingface.co/datasets/cdminix/libritts-r-aligned) for training duration and acoustic models.
-
-```
-(
-    mkdir -p /tmp/data
-    cd /tmp/data
-    git clone https://huggingface.co/datasets/cdminix/libritts-r-aligned
-    ( cd libritts-r-aligned/data; tar --no-same-owner -xzf train_clean_360.tar.gz )
-    wget https://us.openslr.org/resources/141/train_clean_360.tar.gz
-    tar --no-same-owner -xzf train_clean_360.tar.gz
-)
-```
+We are going to use the [MLS-Eng dataset](https://huggingface.co/datasets/parler-tts/mls_eng) for training duration and acoustic models.
 
 ## Duration model
 Prepare the training data for duration model:
 
 ```
-uv run prepare_duration_data.py \
---wav-dir /tmp/data/LibriTTS_R/train-clean-360 \
---textgrid-dir /tmp/data/libritts-r-aligned/data \
---output-dir /tmp/data
+uv run mls_dataset/prepare_duration_data.py \
+--speaker-config mls_dataset/speaker_id_to_idx.json \
+--phone-config mls_dataset/phone_to_idx.json \
+--output-dir /tmp/data/duration \
+--num-workers 8
 ```
 
 
@@ -52,7 +42,7 @@ Sample from the duration model:
 ```
 uv run sample.py \
 --config configs/train_duration_dit_s.yaml \
---ckpt results/duration/015-DiT-S/checkpoints/0120000.pt \
+--ckpt results/duration/006-DiT-S/checkpoints/0280000.pt \
 --num-time-steps 100 \
 --plot-trajectory \
 --plot-trajectory-index 10

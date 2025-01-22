@@ -1,7 +1,7 @@
 model:
   name: DiT-S
   input_size: 512
-  embedding_vocab_size: 16384
+  embedding_vocab_size: 8192
 optimization:
   constant_memory: false
   epochs: 1400
@@ -18,7 +18,9 @@ optimization:
     beta1: 0.9
     beta2: 0.95
 data:
-  data_path: /tmp/data/duration.npy
+  data_path:
+    train: /tmp/data/duration/train.bin
+    test: /tmp/data/duration/test.bin
   data_dim: 1
   data_std: 0.067776896
   data_mean: 0.08663661
